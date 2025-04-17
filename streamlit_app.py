@@ -24,35 +24,11 @@ def create_card(title, subtitle, icon, page_path):
     st.page_link(
         page=page_path,
         label=f"""
-        <div style="
-            background-color: #ffffff;
-            border: 1px solid #d3d3d3;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-            transition: 0.3s ease;
-        ">
-            <div style="font-size: 22px; font-weight: 600; margin-bottom: 10px;">
-                {icon} {title}
-            </div>
-            <div style="font-size: 15px; color: #555; margin-bottom: 20px;">
-                {subtitle}
-            </div>
-            <div style="text-align: right;">
-                <span style="
-                    display: inline-block;
-                    background-color: #0066cc;
-                    color: white;
-                    padding: 6px 14px;
-                    border-radius: 8px;
-                    font-weight: bold;
-                    font-size: 14px;
-                ">
-                    GO →
-                </span>
-            </div>
-        </div>
+### {icon} {title}
+
+{subtitle}
+
+➡️ **GO →**
         """,
         icon=None,
         use_container_width=True
