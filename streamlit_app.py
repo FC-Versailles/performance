@@ -23,37 +23,7 @@ st.markdown("---")
 def create_card(title, subtitle, icon, page_path):
     st.page_link(
         page=page_path,
-        label=f"""
-        <div style="
-            border: 1px solid #ddd;
-            border-radius: 12px;
-            padding: 20px;
-            height: 200px;
-            background-color: #f9f9f9;
-            box-shadow: 0px 2px 8px rgba(0,0,0,0.05);
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            text-decoration: none;
-        ">
-            <div>
-                <div style="font-size: 24px; font-weight: bold; color: black;">{icon} {title}</div>
-                <div style="font-size: 16px; color: #555; margin-top: 6px;">{subtitle}</div>
-            </div>
-            <div style="margin-top: 12px; text-align: right;">
-                <span style="
-                    background-color: #0066cc;
-                    color: white;
-                    padding: 6px 12px;
-                    border-radius: 6px;
-                    font-weight: bold;
-                    font-size: 14px;
-                ">
-                    GO →
-                </span>
-            </div>
-        </div>
-        """,
+        label=f"**{icon} {title}**  \n{subtitle}  \n\n➡️ **GO**",
         icon=None,
         use_container_width=True
     )
