@@ -27,19 +27,35 @@ def create_card(title, subtitle, icon, page_path):
             border: 1px solid #ddd;
             border-radius: 12px;
             padding: 20px;
-            margin-bottom: 10px;
-            height: 160px;
+            margin-bottom: 20px;
+            height: 200px;
             background-color: #f9f9f9;
             box-shadow: 0px 2px 8px rgba(0,0,0,0.05);
-            transition: 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         ">
-            <p style="margin:0; font-size: 24px; font-weight: bold;">{icon} {title}</p>
-            <p style="margin: 4px 0 0; font-size: 16px; color: #555;">{subtitle}</p>
+            <div>
+                <p style="margin:0; font-size: 24px; font-weight: bold;">{icon} {title}</p>
+                <p style="margin-top: 6px; font-size: 16px; color: #555;">{subtitle}</p>
+            </div>
+            <div style="margin-top: 12px;">
+                <a href="/{page_path}" target="_self" style="
+                    display: inline-block;
+                    background-color: #0066cc;
+                    color: white;
+                    padding: 8px 16px;
+                    border-radius: 6px;
+                    text-decoration: none;
+                    font-weight: bold;
+                ">
+                    GO →
+                </a>
+            </div>
         </div>
         """,
         unsafe_allow_html=True
     )
-    st.page_link(page=page_path, label="➡️ GO", icon=None)
 
 
 # Grille des cartes
