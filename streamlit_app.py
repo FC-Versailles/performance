@@ -36,7 +36,8 @@ with col1:
 with col2:
     create_card("🍎", "Nutrition", "Suivi du poids, MG%, et remarques nutrition.", "pages/2_Nutrition.py")
 with col3:
-    
+    create_card("🧘", "Wellness", "Suivi quotidien pré et post-entrainement.", "pages/3_Wellness.py")
+
 
 st.markdown("---")
 st.markdown('<div style="text-align:center;">Développé par Mathieu – FC Versailles</div>', unsafe_allow_html=True)
