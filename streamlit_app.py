@@ -20,7 +20,6 @@ with col2:
 
 st.markdown("---")
 
-# Fonction carte stylée
 def create_card(title, subtitle, icon, page_path):
     st.markdown(
         f"""
@@ -28,7 +27,7 @@ def create_card(title, subtitle, icon, page_path):
             border: 1px solid #ddd;
             border-radius: 12px;
             padding: 20px;
-            margin-bottom: 20px;
+            margin-bottom: 10px;
             height: 160px;
             background-color: #f9f9f9;
             box-shadow: 0px 2px 8px rgba(0,0,0,0.05);
@@ -40,8 +39,8 @@ def create_card(title, subtitle, icon, page_path):
         """,
         unsafe_allow_html=True
     )
-    # Lien fonctionnel vers la page
-    st.page_link(page=page_path, label="", icon=None)
+    st.page_link(page=page_path, label="➡️ GO", icon=None)
+
 
 # Grille des cartes
 col1, col2, col3 = st.columns(3)
