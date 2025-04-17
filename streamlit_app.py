@@ -21,18 +21,18 @@ with col2:
 st.markdown("---")
 
 def create_card(title, subtitle, icon, page_path):
-    st.page_link(
-        page=page_path,
-        label=f"""
-### {icon} {title}
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="border:1px solid #E0E0E0; border-radius:10px; padding:20px; background-color:#FAFAFA; min-height:160px">
+                <div style="font-size:22px; font-weight:bold; margin-bottom:8px">{icon} {title}</div>
+                <div style="font-size:15px; color:#555;">{subtitle}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.page_link(page=page_path, label="➡️ Accéder", icon=None, use_container_width=True)
 
-{subtitle}
-
-➡️ **GO →**
-        """,
-        icon=None,
-        use_container_width=True
-    )
 
 
 col1, col2, col3 = st.columns(3)
