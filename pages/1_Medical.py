@@ -28,7 +28,7 @@ import base64
 
 # Constants for Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE = 'token.pickle'
+TOKEN_FILE = 'token_med.pickle'
 SPREADSHEET_ID = '1UP1kzcTX7hexglokW2b-INUXPamk7zEHB5e0ha5_1fs'  # Replace with your actual Spreadsheet ID
 RANGE_NAME = 'Feuille 1'
 

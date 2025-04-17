@@ -26,7 +26,7 @@ import plotly.express as px
 
 # Constants for Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE = 'token.pickle'
+TOKEN_FILE = 'token_nut.pickle'
 SPREADSHEET_ID = '1CBWB1XKc4FIHFd6w7z8QW5SgLKJBwpvBrcEgDLbPxqI'  # Replace with your actual Spreadsheet ID
 RANGE_NAME = 'Feuille 1'
 
