@@ -33,10 +33,18 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     create_card("Médical", "Données de suivi médical et blessures.", "🏥", "pages/1_Medical.py")
+    create_card("Entrainement", "Planification, disponibilité et priorités d'entraînement.", "📅", "pages/4_Entrainement.py")
+
 with col2:
     create_card("Nutrition", "Suivi du poids, MG%, et remarques nutrition.", "🍎", "pages/2_Nutrition.py")
+    create_card("GPS", "Analyse des données de charge GPS en match et entraînement.", "📡", "pages/5_GPS.py")
+    create_card("Team Analysis", "Indicateurs collectifs liés à la performance et à la tactique.", "🧠", "pages/8_Team_Analysis.py")
+
 with col3:
     create_card("Wellness", "Suivi quotidien pré et post-entrainement.", "🧘", "pages/3_Wellness.py")
+    create_card("Game Analysis", "Données des matchs, stats collectives et phases de jeu.", "🎯", "pages/6_Game_Analysis.py")
+    create_card("Player Analysis", "Profil individuel des joueurs : stats, vidéos, priorité.", "🧍", "pages/7_Player_Analysis.py")
+
 
 
 st.markdown("---")
