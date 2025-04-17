@@ -20,21 +20,37 @@ with col2:
 
 st.markdown("---")
 
-# Fonction de carte avec bouton
 def create_card(icon, title, description, page_name):
-    st.markdown(f"### {icon} {title}")
-    st.write(description)
-    if st.button(f"📂 Ouvrir {title}", key=page_name):
-        st.switch_page(f"pages/{page_name}")
+    st.markdown(
+        f"""
+        <a href="/{page_name}" style="text-decoration: none;">
+            <div style="
+                background-color: #f9f9f9;
+                border: 1px solid #ddd;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 20px;
+                height: 180px;
+                transition: box-shadow 0.3s;
+            " onmouseover="this.style.boxShadow='0px 4px 20px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                <h3 style="color: black;">{icon} {title}</h3>
+                <p style="color: #555;">{description}</p>
+            </div>
+        </a>
+        """,
+        unsafe_allow_html=True
+    )
 
-# Mise en page
+
 col1, col2, col3 = st.columns(3)
+
 with col1:
-    create_card("🏥", "Médical", "Suivi des blessures, soins, réathlétisation.", "1_Medical.py")
+    create_card("🏥", "Médical", "Données de suivi médical et blessures.", "1_Medical")
 with col2:
-    create_card("🍎", "Nutrition", "Poids, MG %, évolution individuelle.", "2_Nutrition.py")
+    create_card("🍎", "Nutrition", "Suivi du poids, MG%, et remarques nutrition.", "2_Nutrition")
 with col3:
-    create_card("🧘", "Wellness", "Sommeil, fatigue, humeur, bien-être global.", "3_Wellness.py")
+    create_card("🧘", "Wellness", "Suivi quotidien pré et post-entrainement.", "3_Wellness")
+
 
 st.markdown("---")
 st.markdown('<div style="text-align:center;">Développé par Mathieu – FC Versailles</div>', unsafe_allow_html=True)
