@@ -87,7 +87,7 @@ def color_gradient(value):
         value = 1
 
     # Normalize the value to fit between 0 and 1 for the gradient
-    norm_value = (value - 1) / (7 - 1)
+    norm_value = (value - 1) / (5 - 1)
     return f"background-color: rgba({','.join(map(str, [int(c * 255) for c in cmap(norm_value)[:3]]))}, 0.6)"
 
 
@@ -109,7 +109,7 @@ data = load_data()
 data = data.rename(columns={
     'Humeur post-entrainement': 'Humeur-Post',
     'Plaisir entrainement': 'Plaisir-Post',
-    'RPE': 'RPE'
+    'RPE': 'RPE', 'Progression entrainement':'Progression'
 })
 
 
@@ -122,7 +122,7 @@ if "Date" in data.columns:
     
 # Sidebar for navigation
 st.sidebar.title("Wellness")
-page = st.sidebar.radio("", ["Pre-entrainement","Post-entrainement","Joueurs","Medical"])
+page = st.sidebar.radio("", ["Pre-entrainement","Post-entrainement"])
 
 if page == "Pre-entrainement":
     st.header("État de l'équipe")
@@ -132,11 +132,11 @@ if page == "Pre-entrainement":
     
     # Define the full list of players
     all_players = [
-        "Hend", "Raux-Yao", "Moussadek", "Guirassy","El hriti","Odzoumo", 
-        "Mbemba", "Ben Brahim", "Santini", "Kodjia", "Mendes", "M'bone", 
-        "Chadet", "Diakhaby", "Altikulac", "Duku", "Mahop", 
-        "Calvet", "Basque", "Tchato", "Baghdadi", "Renot", "Renaud", 
-        "Raux", "Traoré","Koffi","Sallard","Kouassi","Gaval"
+        "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
+        "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+        "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
+        "Santini","Zemoura","Tchato","Ouchen","Traoré"
+     
     ]
 
     # Date selection
@@ -152,7 +152,7 @@ if page == "Pre-entrainement":
     filtered_data = pre_training_data[pre_training_data['Date'] == pd.Timestamp(selected_date)]
 
     # Convert relevant columns to numeric to avoid TypeError
-    columns_to_convert = ['Sommeil', 'Fatigue', 'Courbature', 'Humeur']
+    columns_to_convert = ['Sommeil','Stress', 'Fatigue', 'Courbature', 'Humeur','Alimentation']
     for col in columns_to_convert:
         filtered_data[col] = pd.to_numeric(filtered_data[col], errors='coerce')
         
@@ -161,7 +161,7 @@ if page == "Pre-entrainement":
     players_not_filled = list(set(all_players) - set(players_filled))     
 
     # Drop unnecessary columns for display
-    columns_to_display = ['Nom', 'Sommeil', 'Fatigue', 'Courbature', 'Humeur']
+    columns_to_display = ['Nom', 'Sommeil','Stress', 'Fatigue', 'Courbature', 'Humeur','Alimentation']
     filtered_data_display = filtered_data[columns_to_display]
 
     # Display the filtered data with gradient
@@ -170,7 +170,7 @@ if page == "Pre-entrainement":
 
         # Apply color gradient
         def apply_gradient(df):
-            return df.style.applymap(color_gradient, subset=['Sommeil', 'Fatigue', 'Courbature', 'Humeur'])
+            return df.style.applymap(color_gradient, subset=['Sommeil','Stress', 'Fatigue', 'Courbature', 'Humeur','Alimentation'])
         
         st.dataframe(apply_gradient(filtered_data_display), use_container_width=True)
 
@@ -178,14 +178,16 @@ if page == "Pre-entrainement":
         averages = filtered_data.groupby('Nom')[columns_to_convert].mean().reset_index()
 
         # Display players with high scores
-        high_scores = filtered_data[(filtered_data['Sommeil'] > 5) | 
-                                     (filtered_data['Fatigue'] > 5) | 
-                                     (filtered_data['Courbature'] > 5) | 
-                                     (filtered_data['Humeur'] > 5)]
+        high_scores = filtered_data[(filtered_data['Sommeil'] > 3) |
+                                    (filtered_data['Stress'] > 3) | 
+                                     (filtered_data['Fatigue'] > 3) | 
+                                     (filtered_data['Courbature'] > 3) | 
+                                     (filtered_data['Humeur'] > 3) | 
+                                     (filtered_data['Alimentation'] > 3)]
         if not high_scores.empty:
-            st.write("### Joueurs avec des scores supérieurs à 5:")
+            st.write("#### Joueurs avec des scores supérieurs à 3:")
             for index, row in high_scores.iterrows():
-                st.write(f"- {row['Nom']}: Sommeil {row['Sommeil']} - Fatigue {row['Fatigue']} - Courbature {row['Courbature']} - Humeur {row['Humeur']}")
+                st.write(f"- {row['Nom']}: Sommeil {row['Sommeil']}- Stress {row['Stress']} - Fatigue {row['Fatigue']} - Courbature {row['Courbature']} - Humeur {row['Alimentation']} - Humeur {row['Alimentation']}")
         else:
             st.write("Aucun joueur avec des scores élevés pour aujourd'hui.")
     else:
@@ -198,6 +200,29 @@ if page == "Pre-entrainement":
             st.write(f"- {player}")
     else:
         st.write("Tous les joueurs ont rempli le questionnaire.")
+        
+    st.header("Douleurs déclarées")
+    
+    
+    # Filter data by the selected date
+    filtered_data = data[data['Date'] == pd.Timestamp(selected_date)]
+    
+    # Further filter for players who reported "Oui" for "Douleurs"
+    players_with_pain = filtered_data[filtered_data['Douleurs'] == "Oui"]
+    
+    # Display an overview
+    if not players_with_pain.empty:
+        st.write(f"### {selected_date.strftime('%d-%m-%Y')}")
+        
+        # Display a table of players and details
+        columns_to_display = [
+            'Nom', 'Identifie l\'emplacement de la douleur', 'Intensité de la douleur'
+        ]
+        st.dataframe(players_with_pain[columns_to_display])
+    
+    else:
+        st.write(f"Aucun joueur n'a signalé de douleurs le {selected_date.strftime('%d-%m-%Y')}.")
+           
 
 elif page == "Post-entrainement":
     st.header("État de l'équipe")
@@ -218,11 +243,11 @@ elif page == "Post-entrainement":
     filtered_data = post_training_data[post_training_data['Date'] == pd.Timestamp(selected_date)]
 
     # Columns to display
-    columns_to_display = ['Nom', 'Humeur-Post', 'Plaisir-Post', 'RPE']
+    columns_to_display = ['Nom', 'Humeur-Post', 'Plaisir-Post', 'Progression']
 
     if not filtered_data.empty:
         # Convert columns to numeric if necessary and cast to integers
-        for col in ['Humeur-Post', 'Plaisir-Post', 'RPE']:
+        for col in ['Humeur-Post', 'Plaisir-Post', 'Progression']:
             filtered_data[col] = pd.to_numeric(filtered_data[col], errors='coerce').fillna(0).astype(int)
 
         # Drop unnecessary columns for display
@@ -230,14 +255,14 @@ elif page == "Post-entrainement":
 
         # Apply color gradient to numeric columns
         def apply_gradient(df):
-            return df.style.applymap(color_gradient, subset=['Humeur-Post', 'Plaisir-Post', 'RPE'])
+            return df.style.applymap(color_gradient, subset=['Humeur-Post', 'Plaisir-Post', 'Progression'])
 
         # Display the table with gradients applied
         st.write(f"#### {selected_date.strftime('%d-%m-%Y')}")
         st.dataframe(apply_gradient(filtered_data_display), use_container_width=True)
 
         # Calculate averages
-        averages = filtered_data[['Humeur-Post', 'Plaisir-Post', 'RPE']].mean().round(0).astype(int)
+        averages = filtered_data[['Humeur-Post', 'Plaisir-Post', 'Progression']].mean().round(0).astype(int)
 
         # Convert averages to DataFrame with column names "Métrique" and "Moyenne"
         averages_df = pd.DataFrame({"Métrique": averages.index, "Moyenne": averages.values})
@@ -248,11 +273,11 @@ elif page == "Post-entrainement":
 
         # Check for players who didn't fill the form
         all_players = [
-            "Hend", "Raux-Yao", "Moussadek", "Guirassy","El hriti","Odzoumo", 
-            "Mbemba", "Ben Brahim", "Santini", "Kodjia", "Mendes", "M'bone", 
-            "Chadet", "Diakhaby", "Altikulac", "Duku", "Mahop", 
-            "Calvet", "Basque", "Tchato", "Baghdadi", "Renot", "Renaud", 
-            "Raux", "Traoré","Koffi","Sallard","Kouassi","Gaval"
+             "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
+             "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+             "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
+             "Santini","Zemoura","Tchato","Ouchen","Traoré"
+          
         ]
 
         players_filled = filtered_data['Nom'].dropna().unique()
@@ -267,79 +292,91 @@ elif page == "Post-entrainement":
     else:
         st.write(f"Aucune donnée disponible pour le {selected_date.strftime('%d-%m-%Y')}.")
 
-    # Filter data for "Quand ?" == "post-entrainement"
-    post_training_data = data[data['Quand ?'] == "post-entrainement"]
+    # # Filter data for "Quand ?" == "post-entrainement"
+    # post_training_data = data[data['Quand ?'] == "post-entrainement"]
     
-    # Sidebar selection for variable
-    selected_variable = st.sidebar.selectbox(
-        "Choisir une variable:", 
-        ["Humeur-Post", "Plaisir-Post", "RPE"]
-    )
+    # # Sidebar selection for variable
+    # selected_variable = st.sidebar.selectbox(
+    #     "Choisir une variable:", 
+    #     ["Humeur-Post", "Plaisir-Post", "RPE"]
+    # )
     
-    # Sidebar date range selection
-    date_min = post_training_data['Date'].min()
-    date_max = post_training_data['Date'].max()
-    selected_date_range = st.sidebar.date_input(
-        "Choisir une plage de dates:", 
-        [date_min, date_max], 
-        min_value=date_min, 
-        max_value=date_max
-    )
+    # # Sidebar date range selection
+    # date_min = post_training_data['Date'].min()
+    # date_max = post_training_data['Date'].max()
+    # selected_date_range = st.sidebar.date_input(
+    #     "Choisir une plage de dates:", 
+    #     [date_min, date_max], 
+    #     min_value=date_min, 
+    #     max_value=date_max
+    # )
     
-    # Ensure correct format for date selection
-    if isinstance(selected_date_range, tuple):
-        start_date, end_date = selected_date_range
-    else:
-        start_date, end_date = date_min, date_max  # Fallback in case of error
+    # # Ensure correct format for date selection
+    # if isinstance(selected_date_range, tuple):
+    #     start_date, end_date = selected_date_range
+    # else:
+    #     start_date, end_date = date_min, date_max  # Fallback in case of error
     
-    # Filter data by the selected date range
-    filtered_data = post_training_data[
-        (post_training_data['Date'] >= pd.Timestamp(start_date)) & 
-        (post_training_data['Date'] <= pd.Timestamp(end_date))
-    ]
+    # # Filter data by the selected date range
+    # filtered_data = post_training_data[
+    #     (post_training_data['Date'] >= pd.Timestamp(start_date)) & 
+    #     (post_training_data['Date'] <= pd.Timestamp(end_date))
+    # ]
     
-    # Convert selected variable to numeric if necessary
-    filtered_data[selected_variable] = pd.to_numeric(filtered_data[selected_variable], errors='coerce')
+    # # Convert selected variable to numeric if necessary
+    # filtered_data[selected_variable] = pd.to_numeric(filtered_data[selected_variable], errors='coerce')
     
-    # Interactive plot
-    if not filtered_data.empty:
-        fig = px.line(
-            filtered_data, 
-            x="Date", 
-            y=selected_variable, 
-            color="Nom",
-            markers=True, 
-            title=f"Évolution de {selected_variable}"
-        )
+    # # Interactive plot
+    # if not filtered_data.empty:
+    #     fig = px.line(
+    #         filtered_data, 
+    #         x="Date", 
+    #         y=selected_variable, 
+    #         color="Nom",
+    #         markers=True, 
+    #         title=f"Évolution de {selected_variable}"
+    #     )
     
-        # Customize layout
-        fig.update_layout(
-            xaxis_title="Date",
-            yaxis_title=selected_variable,
-            hovermode="closest"
-        )
+    #     # Customize layout
+    #     fig.update_layout(
+    #         xaxis_title="Date",
+    #         yaxis_title=selected_variable,
+    #         hovermode="closest"
+    #     )
     
-        # Display interactive plot
-        st.plotly_chart(fig, use_container_width=True)
+    #     # Display interactive plot
+    #     st.plotly_chart(fig, use_container_width=True)
     
-        # Display mean per player
-        mean_per_player = filtered_data.groupby("Nom")[selected_variable].mean().reset_index()
-        mean_per_player.columns = ["Nom", f"Moyenne {selected_variable}"]
+    #     # Display mean per player
+    #     mean_per_player = filtered_data.groupby("Nom")[selected_variable].mean().reset_index()
+    #     mean_per_player.columns = ["Nom", f"Moyenne {selected_variable}"]
     
-        st.write(f"### Moyenne de {selected_variable} par joueur")
-        st.dataframe(mean_per_player, use_container_width=True)
+    #     st.write(f"### Moyenne de {selected_variable} par joueur")
+    #     st.dataframe(mean_per_player, use_container_width=True)
     
-    else:
-        st.write("Aucune donnée disponible pour la plage de dates sélectionnée.")
+    # else:
+    #     st.write("Aucune donnée disponible pour la plage de dates sélectionnée.")
     
 
 
 elif page == "Joueurs":
     st.header("Joueur")
     
-    # Sort names alphabetically
-    sorted_names = sorted(data['Nom'].dropna().unique())
-    selected_name = st.sidebar.selectbox("Choisir un nom:", options=sorted_names, index=0)
+    # Nettoyage des noms dans le dataframe
+    data['Nom'] = data['Nom'].str.strip().str.title()
+    
+    # Liste fixe des joueurs (normalisée aussi)
+    all_players = [
+         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
+         "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+         "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
+         "Santini","Zemoura","Tchato","Ouchen","Traoré"
+      
+    ]
+    
+    # Ne garder que ceux présents dans les données
+    available_players = sorted([p for p in all_players if p in data['Nom'].unique()])
+    selected_name = st.sidebar.selectbox("Choisir un nom:", options=available_players)
 
     # Filter data for the selected player
     data_filtered_by_name = data[data['Nom'] == selected_name]
@@ -352,108 +389,139 @@ elif page == "Joueurs":
             return float(value)
         except (ValueError, SyntaxError, TypeError):
             return float('nan')
-
-    # Convert problematic columns
+        
+        # Nettoyage de la colonne RPE
+    data_filtered_by_name['RPE'] = pd.to_numeric(data_filtered_by_name['RPE'], errors='coerce')
+    rpe_data = data_filtered_by_name[['Date', 'RPE']].dropna().sort_values('Date')
+    
+    if not rpe_data.empty:
+        rpe_data['RPE_7j'] = rpe_data['RPE'].rolling(window=7, min_periods=1).mean()
+        rpe_data['RPE_28j'] = rpe_data['RPE'].rolling(window=28, min_periods=1).mean()
+    
+        fig_rpe = go.Figure()
+        
+        # Barres pour les RPE journaliers
+        fig_rpe.add_trace(go.Bar(
+            x=rpe_data['Date'],
+            y=rpe_data['RPE'],
+            name="RPE quotidien",
+            marker_color='rgba(55, 128, 191, 0.7)'
+        ))
+    
+        # Moyenne 7 jours
+        fig_rpe.add_trace(go.Scatter(
+            x=rpe_data['Date'],
+            y=rpe_data['RPE_7j'],
+            mode='lines+markers',
+            name='Moyenne 7 jours',
+            line=dict(color='orange')
+        ))
+    
+        # Moyenne 28 jours
+        fig_rpe.add_trace(go.Scatter(
+            x=rpe_data['Date'],
+            y=rpe_data['RPE_28j'],
+            mode='lines+markers',
+            name='Moyenne 28 jours',
+            line=dict(color='green')
+        ))
+    
+        fig_rpe.update_layout(
+            title=f"Suivi du RPE pour {selected_name}",
+            xaxis_title="Date",
+            yaxis_title="RPE",
+            barmode='overlay',
+            template='simple_white',
+            height=400
+        )
+        
+        st.plotly_chart(fig_rpe, use_container_width=True)
+    else:
+        st.info(f"Aucune donnée RPE disponible pour {selected_name}.")    
+        
+  
+    
+    # Nettoyage des colonnes
     for col in ['Sommeil', 'Fatigue', 'Courbature', 'Humeur']:
         data_filtered_by_name[col] = data_filtered_by_name[col].apply(extract_first_numeric)
-
-    # Drop rows with NaN
+    
     data_filtered_by_name = data_filtered_by_name.dropna(subset=['Sommeil', 'Fatigue', 'Courbature', 'Humeur'])
-
-    # Calculate means
-    mean_values = data_filtered_by_name[['Sommeil', 'Fatigue', 'Courbature', 'Humeur']].mean()
-
-
-    # Calculate metrics
-    if not data_filtered_by_name.empty:
-        # Value of the most recent date
-        latest_date = data_filtered_by_name['Date'].max()
-        latest_values = data_filtered_by_name[data_filtered_by_name['Date'] == latest_date]
-
-        # Mean of all available data
-        mean_values = data_filtered_by_name[['Sommeil', 'Fatigue', 'Courbature', 'Humeur']].mean()
-
-        # Mean of the last 3 days
-        last_three_days = data_filtered_by_name.tail(3)
-        last_three_mean = last_three_days[['Sommeil', 'Fatigue', 'Courbature', 'Humeur']].mean()
-
-        # Create a summary table
-        summary_table = pd.DataFrame({
-            'Metric': ['Valeur du jour', 'Moyenne', 'Moyenne des 3 derniers jours'],
-            'Sommeil': [
-                latest_values['Sommeil'].values[0] if not latest_values.empty else "N/A",
-                mean_values['Sommeil'],
-                last_three_mean['Sommeil']
-            ],
-            'Fatigue': [
-                latest_values['Fatigue'].values[0] if not latest_values.empty else "N/A",
-                mean_values['Fatigue'],
-                last_three_mean['Fatigue']
-            ],
-            'Courbature': [
-                latest_values['Courbature'].values[0] if not latest_values.empty else "N/A",
-                mean_values['Courbature'],
-                last_three_mean['Courbature']
-            ],
-            'Humeur': [
-                latest_values['Humeur'].values[0] if not latest_values.empty else "N/A",
-                mean_values['Humeur'],
-                last_three_mean['Humeur']
-            ]
-        })
-
-        # Display the summary table
-        st.write(f"### Résumé pour {selected_name}")
-        st.table(summary_table)
-
-        # Graphique interactif
-        st.write("### Métriques de Santé")
-        variable = st.selectbox("Choisir la variable:", ["Sommeil", "Fatigue", "Courbature", "Humeur"])
-
-        fig, ax = plt.subplots()
-        ax.plot(data_filtered_by_name['Date'], data_filtered_by_name[variable], marker='o', linestyle='-')
-        ax.set_title(f"{variable}")
-        ax.set_xlabel("Date")
-        ax.set_ylabel(variable)
-        ax.grid(True)
-        # Supprimer les axes supérieurs et droits
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        # Définir la plage de l'axe Y
-        ax.set_ylim(1, 7)
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
+    data_filtered_by_name = data_filtered_by_name.sort_values("Date")
+    
+    # Score bien-être personnalisé
+    def compute_score(df):
+        return (df['Sommeil'] + (7 - df['Fatigue']) + (7 - df['Courbature']) + df['Humeur']) / 4
+    
+    data_filtered_by_name['Score Bien-être'] = data_filtered_by_name.apply(compute_score, axis=1)
+    
+    # Moyennes glissantes
+    data_filtered_by_name['Score_3j'] = data_filtered_by_name['Score Bien-être'].rolling(window=3, min_periods=1).mean()
+    data_filtered_by_name['Score_7j'] = data_filtered_by_name['Score Bien-être'].rolling(window=7, min_periods=1).mean()
+    
+    # Détection de tendance
+    latest_score = data_filtered_by_name.iloc[-1]['Score Bien-être']
+    prev_score = data_filtered_by_name.iloc[-4:-1]['Score Bien-être'].mean()
+    
+    if latest_score > prev_score:
+        trend = "📈 Le bien-être du joueur est en amélioration ces derniers jours."
+    elif latest_score < prev_score:
+        trend = "📉 Le bien-être du joueur semble se dégrader récemment."
     else:
-        st.write(f"Aucune donnée disponible pour {selected_name}.")
-        
-        
-if page == "Medical":
-    st.header("État de l'équipe")
-
-    # Date selection
-    date_min = data['Date'].min()
-    date_max = data['Date'].max()
-    selected_date = st.sidebar.date_input(
-        "Choisir une date:", 
-        min_value=date_min, 
-        max_value=date_max
+        trend = "⏸️ Le bien-être du joueur est stable."
+    
+    # GRAPHIQUE PLOTLY
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=data_filtered_by_name['Date'],
+        y=data_filtered_by_name['Sommeil'],
+        mode='lines+markers',
+        name='Sommeil',
+        line=dict(color='blue')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=data_filtered_by_name['Date'],
+        y=7 - data_filtered_by_name['Fatigue'],  # inversé pour cohérence visuelle
+        mode='lines+markers',
+        name='(7 - Fatigue)',
+        line=dict(color='red')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=data_filtered_by_name['Date'],
+        y=7 - data_filtered_by_name['Courbature'],  # inversé pour cohérence visuelle
+        mode='lines+markers',
+        name='(7 - Courbature)',
+        line=dict(color='orange')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=data_filtered_by_name['Date'],
+        y=data_filtered_by_name['Humeur'],
+        mode='lines+markers',
+        name='Humeur',
+        line=dict(color='green')
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=data_filtered_by_name['Date'],
+        y=data_filtered_by_name['Score Bien-être'],
+        mode='lines+markers',
+        name='Score Bien-être',
+        line=dict(color='purple', width=4, dash='dash')
+    ))
+    
+    # Layout
+    fig.update_layout(
+        title=f"Métriques de bien-être pour {selected_name}",
+        xaxis_title="Date",
+        yaxis_title="Échelle 1-7",
+        hovermode="x unified",
+        template="simple_white",
+        legend=dict(orientation="h", y=-0.3),
+        height=500
     )
-
-    # Filter data by the selected date
-    filtered_data = data[data['Date'] == pd.Timestamp(selected_date)]
-
-    # Further filter for players who reported "Oui" for "Douleurs"
-    players_with_pain = filtered_data[filtered_data['Douleurs'] == "Oui"]
-
-    # Display an overview
-    if not players_with_pain.empty:
-        st.write(f"### {selected_date.strftime('%d-%m-%Y')}")
-        
-        # Display a table of players and details
-        columns_to_display = [
-            'Nom', 'Identifie l\'emplacement de la douleur', 'Intensité de la douleur'
-        ]
-        st.dataframe(players_with_pain[columns_to_display])
-
-    else:
-        st.write(f"Aucun joueur n'a signalé de douleurs le {selected_date.strftime('%d-%m-%Y')}.")
+    
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown(f"**{trend}**")
