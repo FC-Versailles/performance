@@ -15,6 +15,10 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.styles import ParagraphStyle
 import requests
+import re
+from bs4 import BeautifulSoup
+import numpy as np
+
 
 
 
@@ -324,6 +328,9 @@ if page == "Best performance":
 
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
 
+
+# --- Your other data loading and pre-processing goes above this ---
+
 elif page == "Entrainement":
 
     # ── Try to import PDF libs ───────────────────────────────────────────────
@@ -468,7 +475,20 @@ elif page == "Entrainement":
         df_sorted = pd.concat(grouped, ignore_index=True)
         df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
 
-        display_cols = ["Name","Pos"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        # explicitly list the columns in the desired order
+        display_cols = [
+            "Name", "Pos",
+            "Duration", "Duration %",
+            "Distance", "Distance %",
+            "Distance 15km/h", "Distance 15km/h %",
+            "Distance 15-20km/h", "Distance 15-20km/h %",
+            "Distance 20-25km/h", "Distance 20-25km/h %",
+            "Distance 25km/h", "Distance 25km/h %",
+            "Vmax", "Vmax %",
+            "Distance 90% Vmax", "Distance 90% Vmax %",
+            "Acc", "Acc %",
+            "Dec", "Dec %",
+        ]
         df_display = df_sorted.loc[:, display_cols]
 
         def alternate_colors(row):
@@ -479,14 +499,9 @@ elif page == "Entrainement":
         def highlight_moyenne(row):
             if row['Name'] == 'Moyenne':
                 return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
-            elif row['Name'].startswith('Moyenne '):
+            elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
                 return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
             return [''] * len(display_cols)
-
-        styled = df_display.style
-        styled = styled.apply(alternate_colors, axis=1)
-        styled = styled.apply(highlight_moyenne, axis=1)
-        styled = styled.format({**{c:'{:.0f}' for c in objective_fields if c!='Vmax'}, **{'Vmax':'{:.1f}'}, **{f"{c} %":"{:.1f} %" for c in objective_fields}})
 
         def hl(v, obj):
             if pd.isna(v): return ""
@@ -496,8 +511,24 @@ elif page == "Entrainement":
             if d <= 15: return "background-color:#ffe0b2;"
             if d <= 100: return "background-color:#ffcdd2;"
             return ""
+
+        styled = df_display.style
+        styled = styled.apply(alternate_colors, axis=1)
+        styled = styled.apply(highlight_moyenne, axis=1)
+        styled = styled.format({**{c:'{:.0f}' for c in objective_fields if c!='Vmax'}, **{'Vmax':'{:.1f}'}, **{f"{c} %":"{:.1f} %" for c in objective_fields}})
+
+        # Now: for each % column, apply a highlight function, but skip it for Moyenne X lines!
         for stat in objective_fields:
-            styled = styled.applymap(lambda v, obj=objectives[stat]: hl(v,obj), subset=[f"{stat} %"])
+            def fn(row, stat=stat):
+                # Fixed color for Moyenne X (excluding "Moyenne" main)
+                if row['Name'].startswith("Moyenne ") and row['Name'] != "Moyenne":
+                    return [f"background-color:#CFB013; color:#000;" if col==f"{stat} %" else "" for col in row.index]
+                # Main Moyenne keeps its own (handled elsewhere)
+                elif row['Name'] == "Moyenne":
+                    return ["" for col in row.index]
+                else:
+                    return [hl(row[f"{stat} %"], objectives[stat]) if col==f"{stat} %" else "" for col in row.index]
+            styled = styled.apply(fn, axis=1)
 
         styled = styled.set_table_styles([
             {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
@@ -506,7 +537,6 @@ elif page == "Entrainement":
         ], overwrite=False)
         styled = styled.set_table_attributes('class="centered-table"')
 
-        import re
         html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
 
         # ── STREAMLIT HTML RENDER (auto-height to show all rows) ──────────────
@@ -531,90 +561,129 @@ elif page == "Entrainement":
         """
         components.html(wrapper, height=iframe_height, scrolling=False)
 
+
+
 # ── Export PDF with same colored table fit to A4 landscape ───────────────
-    if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                                rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
-        styles = getSampleStyleSheet()
-        normal = styles["Normal"]
 
-        # Header
-        hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=6, leading=7, textColor=HexColor('#0031E3'))
-        resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
-        logo = Image(io.BytesIO(resp.content), width=25, height=25)
-        hdr_data = [
-            Paragraph("<b>Entraînement Objectifs</b>", hdr_style),
-            Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
-            logo
-        ]
-        hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
-        hdr_tbl.setStyle(TableStyle([
-            ('ALIGN',(0,0),(0,0),'LEFT'),
-            ('ALIGN',(1,0),(1,0),'CENTER'),
-            ('ALIGN',(2,0),(2,0),'RIGHT'),
-            ('BOTTOMPADDING',(0,0),(-1,-1),2)
-        ]))
+        if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
+            buf = io.BytesIO()
+            doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                    rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
+            styles = getSampleStyleSheet()
+            normal = styles["Normal"]
+        
+            # Header
+            hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
+            resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
+            logo = Image(io.BytesIO(resp.content), width=40, height=40)
+            hdr_data = [
+                Paragraph("<b>Données GPS - Séance du :</b>", hdr_style),
+                Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
+                logo
+            ]
+            hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
+            hdr_tbl.setStyle(TableStyle([
+                ('ALIGN',(0,0),(0,0),'LEFT'),
+                ('ALIGN',(1,0),(1,0),'CENTER'),
+                ('ALIGN',(2,0),(2,0),'RIGHT'),
+                ('BOTTOMPADDING',(0,0),(-1,-1),2)
+            ]))
+        
+            # Build PDF table data
+            data_pdf = [list(df_display.columns)]
+            for _, row in df_display.iterrows():
+                vals = []
+                for c in df_display.columns:
+                    val = row[c]
+                    if isinstance(val, float) and c == 'Vmax':
+                        vals.append(f"{val:.1f}")
+                    elif isinstance(val, float) and c.endswith('%'):
+                        vals.append(f"{val:.1f} %")
+                    elif isinstance(val, (int, np.integer)):
+                        vals.append(f"{val:d}")
+                    elif pd.isna(val):
+                        vals.append("")
+                    else:
+                        vals.append(str(val))
+                data_pdf.append(vals)
+        
+            # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
+            cell_styles = []
+            nrows = len(data_pdf)
+            ncols = len(data_pdf[0])
+            for row_idx in range(1, nrows):  # skip header
+                row = df_display.iloc[row_idx - 1]
+                for col_idx, col in enumerate(df_display.columns):
+                    cell_color = None
+                    # Moyenne rows
+                    if row['Name'] == 'Moyenne':
+                        cell_color = '#EDE8E8'
+                        cell_text_color = '#0031E3'
+                    elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+                        cell_color = '#CFB013'
+                        cell_text_color = '#000000'
+                    # % columns (objective coloring)
+                    elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
+                        stat = col.replace(' %', '')
+                        val = row[col]
+                        obj = objectives.get(stat, None)
+                        if pd.notna(val) and obj is not None:
+                            d = abs(val - obj)
+                            if d <= 5:
+                                cell_color = '#c8e6c9'
+                            elif d <= 10:
+                                cell_color = '#fff9c4'
+                            elif d <= 15:
+                                cell_color = '#ffe0b2'
+                            else:
+                                cell_color = '#ffcdd2'
+                        cell_text_color = None
+                    # Alternating background for clarity (optional, comment if you don't want)
+                    else:
+                        cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
+                        cell_text_color = None
+                    # Add PDF style if color set
+                    if cell_color:
+                        try:
+                            cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+                        except:
+                            pass
+                    if row['Name'] == 'Moyenne':
+                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor('#0031E3')))
+                    elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
+        
+            # Header row style
+            cell_styles += [
+                ('BACKGROUND',(0,0),(-1,0),HexColor('#0031E3')),
+                ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold')
+            ]
+        
+            base_styles = [
+                ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+                ('FONTNAME',(0,1),(-1,-1),'Helvetica'),
+                ('FONTSIZE',(0,0),(-1,0),4),
+                ('FONTSIZE',(0,1),(-1,-1),6),
+                ('ALIGN',(0,0),(-1,-1),'CENTER'),
+                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                ('LEFTPADDING',(0,0),(-1,-1),2),
+                ('RIGHTPADDING',(0,0),(-1,-1),2),
+                ('TOPPADDING',(0,0),(-1,-1),2),
+                ('BOTTOMPADDING',(0,0),(-1,-1),2),
+            ]
+        
+            pdf_tbl = Table(data_pdf, colWidths=[doc.width/ncols]*ncols, repeatRows=1)
+            pdf_tbl.hAlign = 'CENTER'
+            pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
+        
+            elements = [hdr_tbl, Spacer(1,8), pdf_tbl]
+            doc.build(elements)
+            st.download_button(
+                label="📥 Télécharger le PDF", data=buf.getvalue(),
+                file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
+            )
 
-        # Parse styled HTML table, drop the index
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html_obj, 'html.parser')
-        rows = soup.select('tr')
-        data = []
-        cell_styles = []
-        for i, tr in enumerate(rows):
-            all_cols = tr.find_all(['th','td'])
-            cols = all_cols[1:]  # drop index column
-            row_vals = [col.get_text(strip=True) for col in cols]
-            data.append(row_vals)
-            for j, col in enumerate(cols):
-                style = col.get('style','')
-                bg = None; fg = None
-                for rule in style.split(';'):
-                    if 'background-color' in rule:
-                        bg = HexColor(rule.split(':')[1])
-                    if 'color:' in rule:
-                        fg = HexColor(rule.split(':')[1])
-                if bg:
-                    cell_styles.append(('BACKGROUND',(j,i),(j,i),bg))
-                if fg:
-                    cell_styles.append(('TEXTCOLOR',(j,i),(j,i),fg))
-            # only overall mean row in gold
-            first_val = row_vals[0] if row_vals else ''
-            if first_val == 'Moyenne':
-                cell_styles.append(('BACKGROUND',(0,i),(-1,i),HexColor('#CFB013')))
-                cell_styles.append(('TEXTCOLOR',(0,i),(-1,i),colors.black))
-
-        # Column widths: name and pos then stats
-        ncols = len(data[0]) if data else 1
-        if ncols > 2:
-            name_w = 0.10; pos_w = 0.04
-            other_w = (1 - name_w - pos_w) / (ncols - 2)
-            colWidths = [doc.width * name_w, doc.width * pos_w] + [doc.width * other_w] * (ncols - 2)
-        else:
-            colWidths = [doc.width / ncols] * ncols
-
-        pdf_tbl = Table(data, colWidths=colWidths, repeatRows=1)
-        pdf_tbl.hAlign = 'CENTER'
-
-        base_styles = [
-            ('GRID',(0,0),(-1,-1),0.3,colors.grey),
-            ('BACKGROUND',(0,0),(-1,0),HexColor('#0031E3')),
-            ('TEXTCOLOR',(0,0),(-1,0),colors.white),
-            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-            ('FONTSIZE',(0,0),(-1,0),8),('FONTSIZE',(0,1),(-1,-1),6),
-            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-            ('LEFTPADDING',(0,0),(-1,-1),2),('RIGHTPADDING',(0,0),(-1,-1),2),
-            ('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)
-        ]
-        pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
-
-        elements = [hdr_tbl, Spacer(1,4), pdf_tbl]
-        doc.build(elements)
-        st.download_button(
-            label="📥 Télécharger le PDF", data=buf.getvalue(),
-            file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
-        )
 
 
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
