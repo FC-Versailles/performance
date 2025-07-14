@@ -40,7 +40,7 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ── Fetch & cache data ────────────────────────────────────────────────────────
 SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE     = 'token_gps.pickle'
+TOKEN_FILE     = 'token._gps.pickle'
 SPREADSHEET_ID = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
 RANGE_NAME     = 'Feuille 1!A1:Z'   # only pull columns A through Z
