@@ -18,6 +18,8 @@ import requests
 import re
 from bs4 import BeautifulSoup
 import numpy as np
+import matplotlib.pyplot as plt
+import plotly.express as px
 
 
 
@@ -38,7 +40,7 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ── Fetch & cache data ────────────────────────────────────────────────────────
 SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE     = 'token._gps.pickle'
+TOKEN_FILE     = 'token.pickle'
 SPREADSHEET_ID = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
 RANGE_NAME     = 'Feuille 1!A1:Z'   # only pull columns A through Z
@@ -106,8 +108,8 @@ def load_data():
 
     # keep only your 24 columns
     expected = [
-        "Season","Semaine","HUMEUR","PLAISIR","RPE","Date","Jour","Type","Name",
-        "Duration","Distance","m/min","Distance 15km/h","M/min 15km/h",
+        "Season","Semaine","HUMEUR","PLAISIR","RPE","Date","AMPM","Jour","Type","Name",
+        "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "Distance 90% Vmax","N° Sprints","Vmax","%Vmax","Acc","Dec","Amax","Dmax"
     ]
@@ -185,7 +187,7 @@ player_positions = {
 }
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
-pages = ["Entrainement","Match","Best performance","Player analysis","Minutes de jeu"]
+pages = ["Entrainement","Match","Best performance","Joueurs","Minutes de jeu"]
 page  = st.sidebar.selectbox("Choisissez une page", pages)
 
 
@@ -206,7 +208,7 @@ if page == "Best performance":
         .groupby("Name")[cols]
         .max()
         .reset_index()
-        .sort_values("m/min", ascending=False)
+        .sort_values("M/min", ascending=False)
     )
     st.dataframe(best, use_container_width=True)
 
@@ -217,8 +219,8 @@ if page == "Best performance":
     def flop_n(df, col, n=3):
         return df.nsmallest(n, col)["Name"].tolist()
 
-    st.markdown(f"**🎖️ Top 3 endurants** : {', '.join(top_n(best, 'm/min'))}")
-    st.markdown(f"**🔻Flop 3 endurants** : {', '.join(flop_n(best, 'm/min'))}")
+    st.markdown(f"**🎖️ Top 3 endurants** : {', '.join(top_n(best, 'M/min'))}")
+    st.markdown(f"**🔻Flop 3 endurants** : {', '.join(flop_n(best, 'M/min'))}")
 
     st.markdown(f"**⚡ Top 3 rapides** : {', '.join(top_n(best, 'Vmax'))}")
     st.markdown(f"**🐢 Flop 3 rapides** : {', '.join(flop_n(best, 'Vmax'))}")
@@ -237,7 +239,7 @@ if page == "Best performance":
 
     # B) Define and clean numeric columns
     ref_fields = [
-        "Duration", "Distance", "m/min", "Distance 15km/h", "M/min 15km/h",
+        "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
         "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
         "N° Sprints", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
     ]
@@ -264,13 +266,13 @@ if page == "Best performance":
             for c in ref_fields:
                 rec[c] = full[c].max()
         else:
-            # partial → copy m/min, M/min 15km/h, Vmax; scale others
+            # partial → copy M/min, M/min 15km/h, Vmax; scale others
             longest = grp.loc[grp["Duration"].idxmax()]
             orig = longest["Duration"]
             rec["Duration"] = orig
             for c in ref_fields:
                 val = longest[c]
-                if c in {"Duration","Vmax", "m/min", "M/min 15km/h"} or pd.isna(val) or orig <= 0:
+                if c in {"Duration","Vmax", "M/min", "M/min 15km/h"} or pd.isna(val) or orig <= 0:
                     rec[c] = val
                 else:
                     rec[c] = 90 * val / orig
@@ -319,7 +321,7 @@ if page == "Best performance":
         flop = clean.loc[clean[col].idxmin(), "Name"]
         return f"**{label}** : Top – {top}, Flop – {flop}"
 
-    st.markdown(best_and_worst(Refmatch, "m/min", "Endurance relative"))
+    st.markdown(best_and_worst(Refmatch, "M/min", "Endurance relative"))
     st.markdown(best_and_worst(Refmatch, "Vmax", "Vitesse max relative"))
     st.markdown(best_and_worst(Refmatch, "Acc", "Accélérations max"))
     st.markdown(best_and_worst(Refmatch, "Dec", "Décélérations max"))
@@ -327,7 +329,6 @@ if page == "Best performance":
 
 
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
-
 
 # --- Your other data loading and pre-processing goes above this ---
 
@@ -344,13 +345,13 @@ elif page == "Entrainement":
     except ImportError:
         PDF_ENABLED = False
 
-    st.subheader("🏋️ Performances à l'entraînement")
+    #st.subheader("🏋️ Performances à l'entraînement")
 
     # ── 0) Build Référence Match ──────────────────────────────────────────────
     mask_match = data["Type"].fillna("").str.upper().str.strip() == "GAME"
     match_df_all = data[mask_match].copy()
     ref_fields = [
-        "Duration","Distance","m/min","Distance 15km/h","M/min 15km/h",
+        "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "N° Sprints","Acc","Dec","Vmax","Distance 90% Vmax"
     ]
@@ -379,7 +380,7 @@ elif page == "Entrainement":
             rec["Duration"] = orig
             for c in ref_fields:
                 val = longest[c]
-                if c in {"Vmax","m/min","M/min 15km/h"} or pd.isna(val) or orig <= 0:
+                if c in {"Vmax","M/min","M/min 15km/h"} or pd.isna(val) or orig <= 0:
                     rec[c] = val
                 else:
                     rec[c] = 90 * val / orig
@@ -392,7 +393,7 @@ elif page == "Entrainement":
             Refmatch[c] = Refmatch[c].round(0).astype("Int64")
 
     # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
-    st.markdown("### 🎯 Objectifs Entraînement")
+    st.markdown("#### 🎯 Entraînement")
     allowed_tasks = ["OPTI","MESO","DRILLS","COMPENSATION","MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     min_d, max_d = train_data["Date"].min().date(), train_data["Date"].max().date()
@@ -403,7 +404,15 @@ elif page == "Entrainement":
         min_value=min_d,
         max_value=max_d
     )
-    date_df = train_data[train_data["Date"].dt.date == sel_date]
+
+    date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
+
+    # --- AM/PM filtering, robust ---
+    if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
+        ampm_unique = sorted([str(x) for x in date_df["AMPM"].dropna().unique() if str(x).strip() != "" and str(x).lower() != "nan"])
+        if len(ampm_unique) > 1:
+            sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", ampm_unique, key="ampm")
+            date_df = date_df[date_df["AMPM"] == sel_ampm]
 
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
@@ -687,57 +696,107 @@ elif page == "Entrainement":
 
 
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
-    st.markdown("---")
-    st.markdown("### 📊 Détail Entraînement")
 
-    # date-range picker
-    sel_range = st.date_input(
-        "Période",
-        value=(min_d, max_d),
-        min_value=min_d,
-        max_value=max_d
-    )
-    start, end = sel_range if isinstance(sel_range, (list,tuple)) else (min_d, max_d)
-
-    # semaine & tâche filters
+    st.markdown("### 📊 Analyse collective par date")
+    
+    # Filtres
     col1, col2 = st.columns(2)
     with col1:
         semaines = sorted(train_data["Semaine"].dropna().unique())
         sel_sem = st.multiselect("Semaine(s)", semaines)
     with col2:
-        types = sorted(train_data["Type"].unique())
+        types = sorted(train_data["Type"].dropna().unique())
         sel_task = st.multiselect("Tâche(s)", types)
-
-    # apply all filters
-    filt = train_data[
-        (train_data["Date"].dt.date >= start) &
-        (train_data["Date"].dt.date <= end)
-    ]
+    
+    # Filtrage
+    filt = train_data.copy()
     if sel_sem:
         filt = filt[filt["Semaine"].isin(sel_sem)]
     if sel_task:
         filt = filt[filt["Type"].isin(sel_task)]
-
-    # clean display table
-    to_drop = ["Season","Semaine","HUMEUR","PLAISIR","RPE"]
-    disp = filt.drop(columns=to_drop, errors="ignore").copy()
-    if "Date" in disp.columns:
-        disp["Date"] = disp["Date"].dt.strftime("%d.%m.%y")
-
-    st.dataframe(disp, use_container_width=True)
-
-    if not filt.empty:
-        # your existing plots unchanged…
-        # ── Distance by speed bands
-        # ── Accélérations vs Décélérations
-        # ── Vitesse max
-        pass
-
+    
+    YVARS = [
+        "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
+        "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+        "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax", "Acc", "Dec", "Amax", "Dmax",
+        "HSR", "HSR/min", "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
+    ]
+    sel_y = st.multiselect(
+        "Variable(s) à afficher (max 2)",
+        options=[v for v in YVARS if v in filt.columns],
+        default=["Distance"],
+        max_selections=2
+    )
+    
+    if "Date" in filt.columns:
+        filt["Date"] = pd.to_datetime(filt["Date"], errors="coerce")
+    
+    for col in sel_y:
+        if col in filt.columns:
+            filt[col] = (
+                filt[col]
+                .astype(str)
+                .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+                .str.replace(",", ".", regex=False)
+                .replace("", np.nan)
+                .astype(float)
+            )
+    
+    # Regroupement par date
+    if "Date" in filt.columns and sel_y:
+        grp = (
+            filt.groupby(filt["Date"].dt.date)[sel_y]
+            .mean()
+            .sort_index()
+        )
+    else:
+        grp = None
+    
+    if grp is not None and not grp.empty:
+        grp_plot = grp.reset_index()
+        grp_plot = grp_plot.rename(columns={grp_plot.columns[0]: "Date"})
+    
+        # Création d'une colonne texte pour l'affichage format "dd.mm"
+        grp_plot["Date_fmt"] = grp_plot["Date"].apply(lambda d: d.strftime("%d.%m") if not pd.isnull(d) else "")
+    
+        if isinstance(sel_y, list) and len(sel_y) > 1:
+            fig = px.bar(
+                grp_plot,
+                x="Date",
+                y=sel_y,
+                barmode="group",
+                labels={"value": "Valeur collective"},
+                title=f"Collectif – {' & '.join(sel_y)} par date",
+            )
+        else:
+            col = sel_y[0] if isinstance(sel_y, list) else sel_y
+            fig = px.bar(
+                grp_plot,
+                x="Date",
+                y=col,
+                barmode="group",
+                labels={"value": "Valeur collective"},
+                title=f"Collectif – {col} par date",
+            )
+    
+        fig.update_layout(
+            xaxis_tickangle=0,  # Dates bien horizontales
+            height=400,
+            xaxis_title="Date",
+            yaxis_title="Valeur collective",
+            xaxis=dict(
+                tickmode='array',
+                tickvals=grp_plot["Date"],            # Les vraies valeurs de la colonne Date (datetime.date)
+                ticktext=grp_plot["Date_fmt"],        # Le texte formaté "dd.mm"
+            )
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Aucune donnée selon ces filtres ou variable non sélectionnée.")
 
 
 # ── PAGE: MATCH ───────────────────────────────────────────────────────────────
 elif page == "Match":
-
 
     st.subheader("⚽ Performances en match")
 
@@ -754,23 +813,25 @@ elif page == "Match":
     # 2) Ensure Date is datetime
     if not pd.api.types.is_datetime64_any_dtype(match_data["Date"]):
         match_data["Date"] = pd.to_datetime(match_data["Date"], errors="coerce")
-
-    # 3) Date filter
+  
+    # 3) Date filter (select only one, default: latest)
     available_dates = sorted(match_data["Date"].dt.date.dropna().unique())
-    selected_dates = st.multiselect(
-        "Filtrer par date",
-        options=available_dates,
-        format_func=lambda d: d.strftime("%Y-%m-%d"),
-        default=available_dates,
-    )
-    if selected_dates:
-        match_data = match_data[match_data["Date"].dt.date.isin(selected_dates)]
+    if available_dates:
+        default_last = available_dates[-1]
+        selected_date = st.selectbox(
+            "Choisissez un match",
+            options=available_dates,
+            format_func=lambda d: d.strftime("%d/%m/%Y"),
+            index=len(available_dates) - 1  # default: last date
+        )
+        match_data = match_data[match_data["Date"].dt.date == selected_date]
     else:
         match_data = match_data.iloc[:0]
 
+
     # 4) Prepare & clean/cast French‐formatted numbers for display
     cols = [
-        "Name", "Duration", "Distance", "m/min",
+        "Name", "Duration", "Distance", "M/min",
         "Distance 15km/h", "M/min 15km/h",
         "Distance 15-20km/h", "Distance 20-25km/h",
         "Distance 25km/h", "N° Sprints", "Acc", "Dec",
@@ -852,7 +913,7 @@ elif page == "Match":
 
                 for c in stat_cols:
                     val = longest[c]
-                    if c in {"Duration","Vmax", "m/min", "M/min 15km/h"}:
+                    if c in {"Duration","Vmax", "M/min", "M/min 15km/h"}:
                         # copy raw value for these three
                         rec[c] = val
                     elif pd.notna(val) and orig > 0:
@@ -966,7 +1027,7 @@ elif page == "Match":
 
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
-elif page == "Player analysis":
+elif page == "Joueurs":
     st.subheader("🔎 Analyse d'un joueur")
     players = sorted(data["Name"].dropna().unique())
     sel = st.selectbox("Choisissez un joueur", players)
