@@ -110,7 +110,7 @@ def load_data():
 
     # keep only your 24 columns
     expected = [
-        "Season","Semaine","HUMEUR","PLAISIR","RPE","Date","AMPM","Jour","Type","Name",
+        "Season","Semaine","HUMEUR","PLAISIR","RPE","Date","AMPM","Jour","Type","Teffectif","Name",
         "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "Distance 90% Vmax","N° Sprints","Vmax","%Vmax","Acc","Dec","Amax","Dmax"
@@ -126,7 +126,8 @@ def load_data():
 data = load_data()
 
 
-# ── Pre-process common cols ───────────────────────────────────────────────────
+# ── Pre-process common cols ────────────────────────────────────────────────────
+# Filter by season
 
 # Duration → int (invalid → 0)
 if "Duration" in data.columns:
@@ -398,36 +399,55 @@ elif page == "Entrainement":
     if valid_dates.empty:
         st.warning("Aucune date d'entraînement valide trouvée.")
         st.stop()
-
+    
     min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
-
+    
     sel_date = st.date_input(
         "Choisissez la date pour les objectifs",
         value=max_d,
         min_value=min_d,
         max_value=max_d
     )
-
+    
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
-
+    
     # --- AM/PM filtering, robust ---
     if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
         ampm_unique = sorted([str(x) for x in date_df["AMPM"].dropna().unique() if str(x).strip() != "" and str(x).lower() != "nan"])
         if len(ampm_unique) > 1:
             sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", ampm_unique, key="ampm")
             date_df = date_df[date_df["AMPM"] == sel_ampm]
-
+    
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
     else:
+        # ==== CALCUL TEMPS EFFECTIF & INDICATEUR ====
+        max_duration = pd.to_numeric(date_df["Duration"], errors="coerce").max(skipna=True)
+        max_teffectif = pd.to_numeric(date_df["Teffectif"], errors="coerce").max(skipna=True)
+        # Handle nan and type errors
+        try:
+            if pd.notna(max_duration) and max_duration > 0 and pd.notna(max_teffectif):
+                indicateur = float(max_teffectif) * 100 / float(max_duration)
+            else:
+                indicateur = 0
+        except Exception as e:
+            indicateur = 0
+    
+        st.markdown(
+            f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
+            f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
+            f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
+            f"Indicateur : <b>{indicateur:.1f}%</b>",
+            unsafe_allow_html=True
+        )
+            
         # RPE ajouté en premier
         objective_fields = [
             "RPE",
             "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
             "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
         ]
-
-        st.markdown(f"###### Objectifs du {sel_date}")
+    
         objectives = {}
         # Pour le style : sliders pour tous sauf RPE (qui n'a pas d'objectif %)
         row1, row2 = objective_fields[1:6], objective_fields[6:]
@@ -439,7 +459,7 @@ elif page == "Entrainement":
         for cont, stat in zip(cols5, row2):
             with cont:
                 objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
-
+    
         df_ent = date_df[["Name"] + objective_fields].copy()
         for c in objective_fields:
             cleaned = (
@@ -450,7 +470,7 @@ elif page == "Entrainement":
             )
             num = pd.to_numeric(cleaned, errors="coerce")
             df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
-
+    
         ref_idx = Refmatch.set_index("Name")
         for c in objective_fields:
             if c == "RPE":
@@ -576,8 +596,6 @@ elif page == "Entrainement":
             except:
                 return ""
         styled = styled.applymap(rpe_color, subset=["RPE"])
-
-
 
 
     
