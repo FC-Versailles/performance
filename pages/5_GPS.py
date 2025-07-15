@@ -45,7 +45,7 @@ SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 TOKEN_FILE     = 'token._gps.pickle'
 SPREADSHEET_ID = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
-RANGE_NAME     = 'Feuille 1!A1:Z'   # only pull columns A through Z
+RANGE_NAME = 'Feuille 1!A1:AA'
 
 def get_credentials():
     creds = None
