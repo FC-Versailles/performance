@@ -196,7 +196,7 @@ if page == "Best performance":
     st.subheader("🏅 Meilleures performances")
 
     # === 1) Best-per-game (min > 50) for four core metrics
-    cols = ["m/min", "Vmax", "Amax", "Dmax"]
+    cols = ["M/min", "Vmax", "Amax", "Dmax"]
     best_df = data[(data["Type"] == "GAME") & (data["Duration"] > 45)].copy()
     for c in cols:
         if c in best_df.columns:
@@ -393,7 +393,7 @@ elif page == "Entrainement":
             Refmatch[c] = Refmatch[c].round(0).astype("Int64")
 
     # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
-    st.markdown("#### 🎯 Entraînement")
+    st.markdown("### 🎯 Entraînement")
     allowed_tasks = ["OPTI","MESO","DRILLS","COMPENSATION","MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     min_d, max_d = train_data["Date"].min().date(), train_data["Date"].max().date()
@@ -422,7 +422,7 @@ elif page == "Entrainement":
             "Distance 20-25km/h","Distance 25km/h","Acc","Dec","Vmax","Distance 90% Vmax"
         ]
 
-        st.markdown(f"#### Objectifs du {sel_date}")
+        st.markdown(f"###### Objectifs du {sel_date}")
         objectives = {}
         row1, row2 = objective_fields[:5], objective_fields[5:]
         cols5 = st.columns(5)
@@ -570,8 +570,6 @@ elif page == "Entrainement":
         """
         components.html(wrapper, height=iframe_height, scrolling=False)
 
-
-
 # ── Export PDF with same colored table fit to A4 landscape ───────────────
 
         if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
@@ -695,9 +693,13 @@ elif page == "Entrainement":
 
 
 
+
+
+
+
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
 
-    st.markdown("### 📊 Analyse collective")
+    st.markdown("#### 📊 Analyse collective")
     
     # --- Filtres principaux partagés ---
     col1, col2 = st.columns(2)
@@ -710,7 +712,7 @@ elif page == "Entrainement":
     
     # --- Boucle pour 3 graphiques à la suite ---
     for i in range(1, 4):
-        st.markdown(f"#### Graphique {i}")
+        st.markdown(f"###### Graphique {i}")
         colx, coly = st.columns(2)
         with coly:
             agg_options = {
@@ -810,7 +812,69 @@ elif page == "Entrainement":
         else:
             st.info(f"Aucune donnée pour ce graphique selon ces filtres ou variable non sélectionnée.")
             
-    st.markdown("### 📊 Analyse Individuelle")
+    st.markdown("#### 🏃 Training load")
+    
+    # --- Data cleaning for Duration & RPE ---
+    filt = train_data.copy()
+    for col in ["Duration", "RPE"]:
+        if col in filt.columns:
+            filt[col] = (
+                filt[col]
+                .replace(["None", "nan", "NaN", ""], np.nan)
+                .astype(str)
+                .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+                .str.replace(",", ".", regex=False)
+                .replace("", np.nan)
+            )
+            filt[col] = pd.to_numeric(filt[col], errors="coerce")
+    
+    # --- UA calculation ---
+    filt["UA"] = filt["Duration"] * filt["RPE"]
+    
+    # --- Check 'Semaine' column ---
+    if "Semaine" not in filt.columns:
+        st.warning("La colonne 'Semaine' est manquante.")
+        st.stop()
+    
+    # --- Aggregate UA per week ---
+    ua_per_week = (
+        filt.groupby("Semaine")["UA"].sum().reset_index()
+    )
+    # Ensure Semaine is int, if not already
+    ua_per_week["Semaine"] = pd.to_numeric(ua_per_week["Semaine"], errors="coerce")
+    
+    # --- Prepare weeks 1 to 20 for x-axis, merge with actual data (fill missing with 0) ---
+    weeks = pd.DataFrame({"Semaine": np.arange(1, 21)})
+    ua_per_week = weeks.merge(ua_per_week, on="Semaine", how="left").fillna(0)
+    
+    # --- Plot ---
+    fig = px.bar(
+        ua_per_week,
+        x="Semaine",
+        y="UA",
+        labels={"UA": "Charge hebdomadaire (UA)", "Semaine": "Semaine"},
+        title="Charge collective hebdomadaire (UA = Duration × RPE)",
+        text_auto='.0f',
+        color_discrete_sequence=["#0031E3"]
+    )
+    fig.update_traces(
+        textposition='outside',
+        textfont_size=10,
+        textangle=0,
+        cliponaxis=False
+    )
+    fig.update_layout(
+        xaxis=dict(tickmode="linear", tick0=1, dtick=1, range=[0.5, 20.5]),
+        height=400,
+        xaxis_title="Semaine",
+        yaxis_title="Charge hebdomadaire (UA)",
+        margin=dict(t=40, b=30, l=40, r=30)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    
+    
+    st.markdown("#### 📊 Analyse Individuelle")
     
     # --- Filtres individuels ---
     # --- Filtres individuels (sans le filtre joueur) ---
