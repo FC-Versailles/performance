@@ -20,7 +20,9 @@ from bs4 import BeautifulSoup
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
-
+import matplotlib
+cmap = matplotlib.cm.get_cmap('RdYlGn_r')
+import matplotlib.colors as mcolors
 
 
 
@@ -124,8 +126,7 @@ def load_data():
 data = load_data()
 
 
-# ── Pre-process common cols ────────────────────────────────────────────────────
-# Filter by season
+# ── Pre-process common cols ───────────────────────────────────────────────────
 
 # Duration → int (invalid → 0)
 if "Duration" in data.columns:
@@ -331,7 +332,6 @@ if page == "Best performance":
 # ── PAGE: ENTRAINEMENT ────────────────────────────────────────────────────────
 
 # --- Your other data loading and pre-processing goes above this ---
-
 elif page == "Entrainement":
 
     # ── Try to import PDF libs ───────────────────────────────────────────────
@@ -345,15 +345,13 @@ elif page == "Entrainement":
     except ImportError:
         PDF_ENABLED = False
 
-    #st.subheader("🏋️ Performances à l'entraînement")
-
     # ── 0) Build Référence Match ──────────────────────────────────────────────
     mask_match = data["Type"].fillna("").str.upper().str.strip() == "GAME"
     match_df_all = data[mask_match].copy()
     ref_fields = [
-        "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
-        "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
-        "N° Sprints","Acc","Dec","Vmax","Distance 90% Vmax"
+        "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
+        "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+        "N° Sprints", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
     ]
     for c in ref_fields:
         if c in match_df_all:
@@ -380,7 +378,7 @@ elif page == "Entrainement":
             rec["Duration"] = orig
             for c in ref_fields:
                 val = longest[c]
-                if c in {"Vmax","M/min","M/min 15km/h"} or pd.isna(val) or orig <= 0:
+                if c in {"Vmax", "M/min", "M/min 15km/h"} or pd.isna(val) or orig <= 0:
                     rec[c] = val
                 else:
                     rec[c] = 90 * val / orig
@@ -394,9 +392,14 @@ elif page == "Entrainement":
 
     # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
     st.markdown("### 🎯 Entraînement")
-    allowed_tasks = ["OPTI","MESO","DRILLS","COMPENSATION","MACRO","OPPO","OPTI +","OPTI J-1","REATHLE","MICRO"]
+    allowed_tasks = ["OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", "OPTI +", "OPTI J-1", "REATHLE", "MICRO"]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
-    min_d, max_d = train_data["Date"].min().date(), train_data["Date"].max().date()
+    valid_dates = train_data["Date"].dropna()
+    if valid_dates.empty:
+        st.warning("Aucune date d'entraînement valide trouvée.")
+        st.stop()
+
+    min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
 
     sel_date = st.date_input(
         "Choisissez la date pour les objectifs",
@@ -417,14 +420,17 @@ elif page == "Entrainement":
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
     else:
+        # RPE ajouté en premier
         objective_fields = [
-            "Duration","Distance","Distance 15km/h","Distance 15-20km/h",
-            "Distance 20-25km/h","Distance 25km/h","Acc","Dec","Vmax","Distance 90% Vmax"
+            "RPE",
+            "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+            "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
         ]
 
         st.markdown(f"###### Objectifs du {sel_date}")
         objectives = {}
-        row1, row2 = objective_fields[:5], objective_fields[5:]
+        # Pour le style : sliders pour tous sauf RPE (qui n'a pas d'objectif %)
+        row1, row2 = objective_fields[1:6], objective_fields[6:]
         cols5 = st.columns(5)
         for cont, stat in zip(cols5, row1):
             with cont:
@@ -447,6 +453,8 @@ elif page == "Entrainement":
 
         ref_idx = Refmatch.set_index("Name")
         for c in objective_fields:
+            if c == "RPE":
+                continue  # Pas de colonne % pour RPE
             df_ent[f"{c} %"] = df_ent.apply(
                 lambda r: round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
                 if (r["Name"] in ref_idx.index and pd.notna(r[c]) and pd.notna(ref_idx.at[r["Name"], c]) and ref_idx.at[r["Name"], c] > 0)
@@ -458,15 +466,16 @@ elif page == "Entrainement":
         for c in objective_fields:
             raw_mean = df_ent[c].mean(skipna=True)
             mean_data[c] = round(raw_mean, 1) if c == "Vmax" else int(round(raw_mean, 0))
-            pct_mean = df_ent[f"{c} %"].mean(skipna=True)
-            mean_data[f"{c} %"] = round(pct_mean, 1)
+            if c != "RPE":
+                pct_mean = df_ent[f"{c} %"].mean(skipna=True)
+                mean_data[f"{c} %"] = round(pct_mean, 1)
         df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
 
         df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
         overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
         players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
 
-        pos_order = ["ATT","DC","M","PIS","PIST"]
+        pos_order = ["ATT", "DC", "M", "PIS", "PIST"]
         grouped = []
         for pos in pos_order:
             grp = players_only[players_only["Pos"] == pos].sort_values("Name")
@@ -475,8 +484,9 @@ elif page == "Entrainement":
             mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
             for c in objective_fields:
                 vals = grp[c]
-                mean_vals[c] = round(vals.mean(skipna=True),1) if c == "Vmax" else int(round(vals.mean(skipna=True),0))
-                mean_vals[f"{c} %"] = round(grp[f"{c} %"].mean(skipna=True),1)
+                mean_vals[c] = round(vals.mean(skipna=True), 1) if c == "Vmax" else int(round(vals.mean(skipna=True), 0))
+                if c != "RPE":
+                    mean_vals[f"{c} %"] = round(grp[f"{c} %"].mean(skipna=True), 1)
             grouped.append(pd.DataFrame([mean_vals]))
         others = players_only[~players_only["Pos"].isin(pos_order)].sort_values("Name")
         if not others.empty: grouped.append(others)
@@ -484,9 +494,9 @@ elif page == "Entrainement":
         df_sorted = pd.concat(grouped, ignore_index=True)
         df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
 
-        # explicitly list the columns in the desired order
+        # explicitly list the columns in the desired order, RPE left
         display_cols = [
-            "Name", "Pos",
+            "RPE", "Name", "Pos",
             "Duration", "Duration %",
             "Distance", "Distance %",
             "Distance 15km/h", "Distance 15km/h %",
@@ -498,6 +508,8 @@ elif page == "Entrainement":
             "Acc", "Acc %",
             "Dec", "Dec %",
         ]
+        # Ne garde que les colonnes existantes
+        display_cols = [c for c in display_cols if c in df_sorted.columns]
         df_display = df_sorted.loc[:, display_cols]
 
         def alternate_colors(row):
@@ -524,19 +536,27 @@ elif page == "Entrainement":
         styled = df_display.style
         styled = styled.apply(alternate_colors, axis=1)
         styled = styled.apply(highlight_moyenne, axis=1)
-        styled = styled.format({**{c:'{:.0f}' for c in objective_fields if c!='Vmax'}, **{'Vmax':'{:.1f}'}, **{f"{c} %":"{:.1f} %" for c in objective_fields}})
+        style_formats = {}
+        for c in objective_fields:
+            if c != "RPE":
+                style_formats[f"{c} %"] = "{:.1f} %"
+            elif c == "Vmax":
+                style_formats[c] = "{:.1f}"
+            else:
+                style_formats[c] = "{:.0f}"
+        styled = styled.format(style_formats)
 
-        # Now: for each % column, apply a highlight function, but skip it for Moyenne X lines!
+        # Coloration pour les colonnes % (sauf RPE % qui n'existe pas)
         for stat in objective_fields:
+            if stat == "RPE":
+                continue
             def fn(row, stat=stat):
-                # Fixed color for Moyenne X (excluding "Moyenne" main)
                 if row['Name'].startswith("Moyenne ") and row['Name'] != "Moyenne":
-                    return [f"background-color:#CFB013; color:#000;" if col==f"{stat} %" else "" for col in row.index]
-                # Main Moyenne keeps its own (handled elsewhere)
+                    return [f"background-color:#CFB013; color:#000;" if col == f"{stat} %" else "" for col in row.index]
                 elif row['Name'] == "Moyenne":
                     return ["" for col in row.index]
                 else:
-                    return [hl(row[f"{stat} %"], objectives[stat]) if col==f"{stat} %" else "" for col in row.index]
+                    return [hl(row[f"{stat} %"], objectives[stat]) if col == f"{stat} %" else "" for col in row.index]
             styled = styled.apply(fn, axis=1)
 
         styled = styled.set_table_styles([
@@ -545,7 +565,22 @@ elif page == "Entrainement":
             {'selector': 'th.blank', 'props': 'display:none;'}
         ], overwrite=False)
         styled = styled.set_table_attributes('class="centered-table"')
+        
+        def rpe_color(val, vmin=1, vmax=10):
+            if pd.isna(val): return ""
+            try:
+                norm = (float(val) - vmin) / (vmax - vmin)
+                norm = min(max(norm, 0), 1)
+                color = mcolors.rgb2hex(cmap(norm))
+                return f"background-color:{color};"
+            except:
+                return ""
+        styled = styled.applymap(rpe_color, subset=["RPE"])
 
+
+
+
+    
         html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
 
         # ── STREAMLIT HTML RENDER (auto-height to show all rows) ──────────────
@@ -570,15 +605,14 @@ elif page == "Entrainement":
         """
         components.html(wrapper, height=iframe_height, scrolling=False)
 
-# ── Export PDF with same colored table fit to A4 landscape ───────────────
-
+        # ── Export PDF with same colored table fit to A4 landscape ───────────────
         if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
             buf = io.BytesIO()
             doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
                                     rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
             styles = getSampleStyleSheet()
             normal = styles["Normal"]
-        
+
             # Header
             hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
             resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
@@ -590,12 +624,12 @@ elif page == "Entrainement":
             ]
             hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
             hdr_tbl.setStyle(TableStyle([
-                ('ALIGN',(0,0),(0,0),'LEFT'),
-                ('ALIGN',(1,0),(1,0),'CENTER'),
-                ('ALIGN',(2,0),(2,0),'RIGHT'),
-                ('BOTTOMPADDING',(0,0),(-1,-1),2)
+                ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+                ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
             ]))
-        
+
             # Build PDF table data
             data_pdf = [list(df_display.columns)]
             for _, row in df_display.iterrows():
@@ -613,7 +647,7 @@ elif page == "Entrainement":
                     else:
                         vals.append(str(val))
                 data_pdf.append(vals)
-        
+
             # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
             cell_styles = []
             nrows = len(data_pdf)
@@ -622,14 +656,27 @@ elif page == "Entrainement":
                 row = df_display.iloc[row_idx - 1]
                 for col_idx, col in enumerate(df_display.columns):
                     cell_color = None
-                    # Moyenne rows
-                    if row['Name'] == 'Moyenne':
+                    cell_text_color = None
+            
+                    # ---------- PRIORITÉ : RPE couleur ----------
+                    if col == "RPE" and pd.notna(row["RPE"]):
+                        val = float(row["RPE"])
+                        norm = (val - 1) / (10 - 1)
+                        norm = min(max(norm, 0), 1)
+                        color = mcolors.rgb2hex(cmap(norm))
+                        cell_color = color
+                        cell_text_color = "#000000"
+            
+                    # ---------- Moyenne (SURCHARGE) ----------
+                    elif row['Name'] == 'Moyenne':
                         cell_color = '#EDE8E8'
                         cell_text_color = '#0031E3'
+            
                     elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
                         cell_color = '#CFB013'
                         cell_text_color = '#000000'
-                    # % columns (objective coloring)
+            
+                    # ---------- % columns (objective coloring) ----------
                     elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
                         stat = col.replace(' %', '')
                         val = row[col]
@@ -644,59 +691,56 @@ elif page == "Entrainement":
                                 cell_color = '#ffe0b2'
                             else:
                                 cell_color = '#ffcdd2'
-                        cell_text_color = None
-                    # Alternating background for clarity (optional, comment if you don't want)
-                    else:
+            
+                    # ---------- Alternance pour tout le reste ----------
+                    if cell_color is None:
                         cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
-                        cell_text_color = None
-                    # Add PDF style if color set
-                    if cell_color:
+                    # PDF style
+                    try:
+                        cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+                    except:
+                        pass
+                    if cell_text_color:
                         try:
-                            cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+                            cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_text_color)))
                         except:
                             pass
-                    if row['Name'] == 'Moyenne':
-                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor('#0031E3')))
                     elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
                         cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
-        
+
+
+
             # Header row style
             cell_styles += [
-                ('BACKGROUND',(0,0),(-1,0),HexColor('#0031E3')),
-                ('TEXTCOLOR',(0,0),(-1,0),colors.white),
-                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold')
+                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#0031E3')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold')
             ]
-        
+            
             base_styles = [
-                ('GRID',(0,0),(-1,-1),0.25,colors.grey),
-                ('FONTNAME',(0,1),(-1,-1),'Helvetica'),
-                ('FONTSIZE',(0,0),(-1,0),4),
-                ('FONTSIZE',(0,1),(-1,-1),6),
-                ('ALIGN',(0,0),(-1,-1),'CENTER'),
-                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                ('LEFTPADDING',(0,0),(-1,-1),2),
-                ('RIGHTPADDING',(0,0),(-1,-1),2),
-                ('TOPPADDING',(0,0),(-1,-1),2),
-                ('BOTTOMPADDING',(0,0),(-1,-1),2),
+                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, 0), 4),
+                ('FONTSIZE', (0, 1), (-1, -1), 6),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
             ]
-        
-            pdf_tbl = Table(data_pdf, colWidths=[doc.width/ncols]*ncols, repeatRows=1)
+            
+            pdf_tbl = Table(data_pdf, colWidths=[doc.width / ncols] * ncols, repeatRows=1)
             pdf_tbl.hAlign = 'CENTER'
             pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
-        
-            elements = [hdr_tbl, Spacer(1,8), pdf_tbl]
+            
+            elements = [hdr_tbl, Spacer(1, 8), pdf_tbl]
             doc.build(elements)
             st.download_button(
                 label="📥 Télécharger le PDF", data=buf.getvalue(),
                 file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
             )
-
-
-
-
-
-
-
+                                                                     
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
 
     st.markdown("#### 📊 Analyse collective")
