@@ -611,7 +611,8 @@ elif page == "Entrainement":
         elif c in df_display.columns:
             style_formats[c] = "{:.0f}"
     styled = styled.format(style_formats)
-
+    
+    objectives = {}
     for stat in objective_fields:
         if f"{stat} %" not in df_display.columns: continue
         def fn(row, stat=stat):
@@ -668,6 +669,7 @@ elif page == "Entrainement":
 
     # ── Export PDF with same colored table fit to A4 landscape ───────────────
     if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
+        obj = objectives.get("Duration", None) 
         buf = io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
                                 rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
