@@ -334,6 +334,17 @@ if page == "Best performance":
 
 # --- Your other data loading and pre-processing goes above this ---
 elif page == "Entrainement":
+    # --- Import PDF libs and set PDF_ENABLED ---
+    try:
+        from reportlab.lib.pagesizes import landscape, A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
+        from reportlab.lib import colors
+        from reportlab.lib.colors import HexColor
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        PDF_ENABLED = True
+    except ImportError:
+        PDF_ENABLED = False
+
 
     # ========== OBJECTIVE FIELDS ==========
     objective_fields = [
