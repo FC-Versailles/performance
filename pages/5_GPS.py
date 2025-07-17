@@ -22,8 +22,9 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import matplotlib
 cmap = matplotlib.cm.get_cmap('RdYlGn_r')
+cmaps = matplotlib.cm.get_cmap('RdYlGn')
+cmapa = matplotlib.cm.get_cmap('Greens')  # ou RdYlGn pour du rouge/vert
 import matplotlib.colors as mcolors
-
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -124,7 +125,7 @@ def load_data():
     return df
 
 data = load_data()
-
+data = data[data["Name"] != "BAGHDADI"]
 
 # ── Pre-process common cols ────────────────────────────────────────────────────
 # Filter by season
@@ -1078,8 +1079,8 @@ elif page == "Entrainement":
 # ── PAGE: MATCH ───────────────────────────────────────────────────────────────
 elif page == "Match":
 
-    st.subheader("⚽ Performances en match")
-
+    st.subheader("⚽ Performance du match")
+    
     # 1) Filter to GAME rows
     mask = (
         data["Type"]
@@ -1089,11 +1090,11 @@ elif page == "Match":
             .str.upper() == "GAME"
     )
     match_data = data[mask].copy()
-
+    
     # 2) Ensure Date is datetime
     if not pd.api.types.is_datetime64_any_dtype(match_data["Date"]):
         match_data["Date"] = pd.to_datetime(match_data["Date"], errors="coerce")
-  
+    
     # 3) Date filter (select only one, default: latest)
     available_dates = sorted(match_data["Date"].dt.date.dropna().unique())
     if available_dates:
@@ -1107,9 +1108,8 @@ elif page == "Match":
         match_data = match_data[match_data["Date"].dt.date == selected_date]
     else:
         match_data = match_data.iloc[:0]
-
-
-    # 4) Prepare & clean/cast French‐formatted numbers for display
+    
+    # 4) Prepare & clean/cast numbers for display
     cols = [
         "Name", "Duration", "Distance", "M/min",
         "Distance 15km/h", "M/min 15km/h",
@@ -1117,9 +1117,9 @@ elif page == "Match":
         "Distance 25km/h", "N° Sprints", "Acc", "Dec",
         "Vmax", "Distance 90% Vmax"
     ]
-    df = match_data.loc[:, cols].copy()
     stat_cols = [c for c in cols if c != "Name"]
-
+    
+    df = match_data.loc[:, cols].copy()
     for c in stat_cols:
         if c in df.columns:
             cleaned = (
@@ -1131,39 +1131,19 @@ elif page == "Match":
             num = pd.to_numeric(cleaned, errors="coerce")
         else:
             num = pd.Series(pd.NA, index=df.index)
-
+    
         if c == "Vmax":
             df[c] = num.round(1)
         else:
             df[c] = num.round(0).astype("Int64")
-
-    # 5) Render the first scrollable table
-    html_table = df.to_html(index=False, classes="centered-table")
-    row_h = 35
-    total_h = max(300, len(df) * row_h)
-    html = f"""
-    <html><head>
-      <style>
-        .centered-table {{ border-collapse:collapse; width:100%; }}
-        .centered-table th, .centered-table td {{
-          text-align:center; padding:4px 8px; border:1px solid #ddd;
-        }}
-        .centered-table th {{ background:#f0f0f0; }}
-      </style>
-    </head><body>
-      <div style="max-height:{total_h}px;overflow-y:auto;">
-        {html_table}
-      </div>
-    </body></html>
-    """
-    components.html(html, height=total_h + 1, scrolling=True)
-
-    # ── Référence Match ──
+    
+    # 5) --- CALCUL REF MATCH AVANT LE TABLEAU ---
     match_df = data[mask].copy()
     if match_df.empty:
         st.info("Aucune donnée de match pour construire la référence.")
+        Refmatch = None
     else:
-        # A) clean & numeric‐cast reference data
+        # Clean & numeric‐cast
         for c in stat_cols:
             if c in match_df.columns:
                 cleaned = (
@@ -1175,121 +1155,59 @@ elif page == "Match":
                 match_df[c] = pd.to_numeric(cleaned, errors="coerce")
             else:
                 match_df[c] = pd.NA
-
-        # B) build per‐player reference
+    
         records = []
         for name, grp in match_df.groupby("Name"):
             rec = {"Name": name}
             full = grp[grp["Duration"] >= 90]
             if not full.empty:
-                # full‐length games: take the max of each stat
                 for c in stat_cols:
                     rec[c] = full[c].max()
             else:
-                # only partial games: scale some stats, copy others
                 longest = grp.loc[grp["Duration"].idxmax()]
                 orig = longest["Duration"]
                 rec["Duration"] = orig
-
                 for c in stat_cols:
                     val = longest[c]
-                    if c in {"Duration","Vmax", "M/min", "M/min 15km/h"}:
-                        # copy raw value for these three
+                    if c in {"Duration", "Vmax", "M/min", "M/min 15km/h"}:
                         rec[c] = val
                     elif pd.notna(val) and orig > 0:
-                        # scale everything else to 90'
                         rec[c] = 90 * val / orig
                     else:
                         rec[c] = pd.NA
-
             records.append(rec)
-
         Refmatch = pd.DataFrame.from_records(records, columns=["Name"] + stat_cols)
-
-        # C) Round & cast types
         for c in stat_cols:
             if c == "Vmax":
                 Refmatch[c] = Refmatch[c].round(1)
             else:
                 Refmatch[c] = Refmatch[c].round(0).astype("Int64")
-
-        # D) Display
-        st.subheader("🏆 Référence Match")
-        st.dataframe(Refmatch, use_container_width=True)
-
-
-        st.subheader("🎯 Objectifs Match")
-        
-        objective_fields = [
-            "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-            "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-        ]
-        
-        # 1) Sliders in 2×5 grid
-        row1, row2 = objective_fields[:5], objective_fields[5:]
-        objectives = {}
-        cols5 = st.columns(5)
-        for i, stat in enumerate(row1):
-            with cols5[i]:
-                objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
-        cols5 = st.columns(5)
-        for i, stat in enumerate(row2):
-            with cols5[i]:
-                objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
-        
-        # 2) Compute % of personal reference per match row
-        obj_df = df.copy()
-        ref_indexed = Refmatch.set_index("Name")
-        for c in objective_fields:
-            obj_df[f"{c} %"] = obj_df.apply(
-                lambda r: round(r[c] / ref_indexed.at[r["Name"], c] * 100, 1)
-                          if (r["Name"] in ref_indexed.index
-                              and pd.notna(ref_indexed.at[r["Name"], c]) 
-                              and ref_indexed.at[r["Name"], c] > 0
-                              and pd.notna(r[c]))
-                          else pd.NA,
-                axis=1
-            )
-        
-        # 3) Highlight helper
-        def highlight_stat(val, obj):
-            if pd.isna(val):
-                return ""
-            d = abs(val - obj)
-            if d <= 5:   return "background-color: #c8e6c9;"
-            if d <= 10:  return "background-color: #fff9c4;"
-            if d <= 15:  return "background-color: #ffe0b2;"
-            if d <= 20:  return "background-color: #ffcdd2;"
-            return ""
-        
-        # 4) Build & render styled table
-        display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
-        styled = (
-            obj_df.loc[:, display_cols]
-                  .style
-                  .format(
-                      { **{f"{c} %": "{:.1f} %" for c in objective_fields},
-                        **{"Vmax": "{:.1f}"}                # one decimal for raw Vmax
-                      },
-                      na_rep="—"
-                  )
-        )
-        
-        # apply per-column highlighting only on the % columns
-        for c in objective_fields:
-            styled = styled.applymap(
-                lambda v, obj=objectives[c]: highlight_stat(v, obj),
-                subset=[f"{c} %"]
-            )
-        
-        styled = styled.set_table_attributes('class="centered-table"')
-        
-        # 5) wrap in scrollable div
-        html_obj = styled.to_html()
-        row_h = 35
-        total_h2 = max(300, len(obj_df) * row_h)
-        html2 = f"""
-        <html><head>
+    
+    # 6) --- TABLEAU COLORÉ ---
+    if Refmatch is not None and not Refmatch.empty:
+        import matplotlib
+        import matplotlib.colors as mcolors
+    
+        cmap = matplotlib.cm.get_cmap('Greens')
+        ref_dict = Refmatch.set_index("Name")[stat_cols].to_dict(orient="index")
+    
+        def get_color(val, ref, threshold=0.9):
+            if pd.isna(val) or pd.isna(ref):
+                return "background-color:#eee;"
+            ratio = float(val) / ref if ref else 0
+            if ratio >= 0.999:  # pile la valeur de ref
+                rgb = cmap(1.0)[:3]
+            elif ratio >= threshold:
+                rgb = cmap(0.6)[:3]
+            else:
+                return ""  # pas de couleur si <90%
+            hex_color = mcolors.rgb2hex(rgb)
+            return f"background-color:{hex_color};"
+    
+        # Générer le HTML
+        html = """
+        <html>
+        <head>
           <style>
             .centered-table {{ border-collapse:collapse; width:100%; }}
             .centered-table th, .centered-table td {{
@@ -1297,13 +1215,213 @@ elif page == "Match":
             }}
             .centered-table th {{ background:#f0f0f0; }}
           </style>
-        </head><body>
-          <div style="max-height:{total_h2}px;overflow-y:auto;">
-            {html_obj}
+        </head>
+        <body>
+          <div style="max-height:{}px;overflow-y:auto;">
+            <table class="centered-table">
+              <thead>
+                <tr>{}</tr>
+              </thead>
+              <tbody>
+        """.format(
+            max(300, len(df) * 35),
+            "".join([f"<th>{col}</th>" for col in df.columns])
+        )
+    
+        for i, row in df.iterrows():
+            name = row["Name"]
+            html += "<tr>"
+            for j, col in enumerate(df.columns):
+                val = row[col]
+                style = ""
+                if col in stat_cols and name in ref_dict and col in ref_dict[name]:
+                    ref = ref_dict[name][col]
+                    style = get_color(val, ref)
+                if col == "Vmax" and pd.notna(val):
+                    disp = f"{val:.1f}"
+                elif col != "Name" and pd.notna(val):
+                    disp = str(int(val))
+                else:
+                    disp = val if pd.notna(val) else ""
+                html += f'<td style="{style}">{disp}</td>'
+            html += "</tr>"
+    
+        html += """
+              </tbody>
+            </table>
           </div>
-        </body></html>
+        </body>
+        </html>
         """
-        components.html(html2, height=total_h2 + 20, scrolling=True)
+    
+        components.html(html, height=max(300, len(df) * 35) + 1, scrolling=True)
+    
+    else:
+        st.info("Aucune référence pour coloration.")
+
+
+    # D) Display
+    st.subheader("🏆 Référence Match")
+    
+    ref_df = Refmatch.copy()
+    ref_df = ref_df[[c for c in cols if c in ref_df.columns]]
+    
+    def value_to_color(val, vmin, vmax):
+        if pd.isna(val):
+            return "background-color:#eee;"  # gris clair pour NA
+        norm = (val - vmin) / (vmax - vmin) if vmax > vmin else 0.5
+        rgb = cmaps(norm)[:3]
+        hex_color = mcolors.rgb2hex(rgb)
+        return f"background-color:{hex_color};"
+    
+    # Construit la matrice de styles :
+    styles = []
+    for col in ref_df.columns:
+        if col == "Name":
+            styles.append([""] * len(ref_df))
+            continue
+        vals = ref_df[col]
+        vmin, vmax = vals.min(skipna=True), vals.max(skipna=True)
+        col_styles = [value_to_color(v, vmin, vmax) for v in vals]
+        styles.append(col_styles)
+    
+    # Transpose pour avoir les styles par ligne
+    styles_per_row = list(map(list, zip(*styles)))
+    
+    # Génère le HTML du tableau avec couleurs
+    html = """
+    <html>
+    <head>
+      <style>
+        .centered-table {{ border-collapse:collapse; width:100%; }}
+        .centered-table th, .centered-table td {{
+          text-align:center; padding:4px 8px; border:1px solid #ddd;
+        }}
+        .centered-table th {{ background:#f0f0f0; }}
+      </style>
+    </head>
+    <body>
+      <div style="max-height:{}px;overflow-y:auto;">
+        <table class="centered-table">
+          <thead>
+            <tr>{}</tr>
+          </thead>
+          <tbody>
+    """.format(
+        max(300, len(ref_df) * 35),
+        "".join([f"<th>{col}</th>" for col in ref_df.columns])
+    )
+    
+    for i, row in ref_df.iterrows():
+        html += "<tr>"
+        for j, val in enumerate(row):
+            style = styles_per_row[i][j]
+            # Affichage selon la colonne
+            if ref_df.columns[j] == "Vmax" and pd.notna(val):
+                disp = f"{val:.1f}"
+            elif ref_df.columns[j] != "Name" and pd.notna(val):
+                disp = str(int(val))
+            else:
+                disp = val if pd.notna(val) else ""
+            html += f'<td style="{style}">{disp}</td>'
+        html += "</tr>"
+    
+    html += """
+          </tbody>
+        </table>
+      </div>
+    </body>
+    </html>
+    """
+    
+    components.html(html, height=max(300, len(ref_df) * 35) + 1, scrolling=True)
+
+        # st.subheader("🎯 Objectifs Match") #Match de préparation
+        
+        # objective_fields = [
+        #     "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        #     "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+        # ]
+        
+        # # 1) Sliders in 2×5 grid
+        # row1, row2 = objective_fields[:5], objective_fields[5:]
+        # objectives = {}
+        # cols5 = st.columns(5)
+        # for i, stat in enumerate(row1):
+        #     with cols5[i]:
+        #         objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
+        # cols5 = st.columns(5)
+        # for i, stat in enumerate(row2):
+        #     with cols5[i]:
+        #         objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
+        
+        # # 2) Compute % of personal reference per match row
+        # obj_df = df.copy()
+        # ref_indexed = Refmatch.set_index("Name")
+        # for c in objective_fields:
+        #     obj_df[f"{c} %"] = obj_df.apply(
+        #         lambda r: round(r[c] / ref_indexed.at[r["Name"], c] * 100, 1)
+        #                   if (r["Name"] in ref_indexed.index
+        #                       and pd.notna(ref_indexed.at[r["Name"], c]) 
+        #                       and ref_indexed.at[r["Name"], c] > 0
+        #                       and pd.notna(r[c]))
+        #                   else pd.NA,
+        #         axis=1
+        #     )
+        
+        # # 3) Highlight helper
+        # def highlight_stat(val, obj):
+        #     if pd.isna(val):
+        #         return ""
+        #     d = abs(val - obj)
+        #     if d <= 5:   return "background-color: #c8e6c9;"
+        #     if d <= 10:  return "background-color: #fff9c4;"
+        #     if d <= 15:  return "background-color: #ffe0b2;"
+        #     if d <= 20:  return "background-color: #ffcdd2;"
+        #     return ""
+        
+        # # 4) Build & render styled table
+        # display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
+        # styled = (
+        #     obj_df.loc[:, display_cols]
+        #           .style
+        #           .format(
+        #               { **{f"{c} %": "{:.1f} %" for c in objective_fields},
+        #                 **{"Vmax": "{:.1f}"}                # one decimal for raw Vmax
+        #               },
+        #               na_rep="—"
+        #           )
+        # )
+        
+        # # apply per-column highlighting only on the % columns
+        # for c in objective_fields:
+        #     styled = styled.applymap(
+        #         lambda v, obj=objectives[c]: highlight_stat(v, obj),
+        #         subset=[f"{c} %"]
+        #     )
+        
+        # styled = styled.set_table_attributes('class="centered-table"')
+        
+        # # 5) wrap in scrollable div
+        # html_obj = styled.to_html()
+        # row_h = 35
+        # total_h2 = max(300, len(obj_df) * row_h)
+        # html2 = f"""
+        # <html><head>
+        #   <style>
+        #     .centered-table {{ border-collapse:collapse; width:100%; }}
+        #     .centered-table th, .centered-table td {{
+        #       text-align:center; padding:4px 8px; border:1px solid #ddd;
+        #     }}
+        #     .centered-table th {{ background:#f0f0f0; }}
+        #   </style>
+        # </head><body>
+        #   <div style="max-height:{total_h2}px;overflow-y:auto;">
+        #     {html_obj}
+        #   </div>
+        # </body></html>
+        # """
+        # components.html(html2, height=total_h2 + 20, scrolling=True)
 
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
