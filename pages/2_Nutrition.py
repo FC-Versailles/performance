@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
 import plotly.express as px
+from datetime import date
 
 # Constants for Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -90,11 +91,13 @@ def load_data():
 
 # Load your data
 data = load_data()
-
-data = data[~data['Nom'].isin(['Agoro', 'Bangoura', 'Mbala'])]
-
-# Data preprocessing
+data['Saison'] = data['Saison'].astype(str).str.strip()
+data = data[data['Saison'] == '2526']
+data['Date'] = data['Date'].astype(str).str.strip()
+data['Date'] = data['Date'].replace('', np.nan)
 data['Date'] = pd.to_datetime(data['Date'], errors='coerce')
+
+
 data['Poids'] = data['Poids'].str.replace(',', '.')
 data['MG %'] = data['MG %'].str.replace(',', '.')
 
@@ -102,7 +105,7 @@ data['MG %'] = data['MG %'].str.replace(',', '.')
 data.replace('', np.nan, inplace=True)
 
 # Drop rows with NaN values in 'Poids' and 'MG %'
-data.dropna(subset=['Poids', 'MG %'], inplace=True)
+data.dropna(subset=['Poids'], inplace=True)
 
 # Convert columns to float
 data['Poids'] = data['Poids'].astype(float)
@@ -116,23 +119,30 @@ if page == "Equipe":
     st.title("Etat de l'équipe")
     st.markdown("#### Choisir la date")
     if not data.empty:
-        min_date = data['Date'].min().date()
-        max_date = data['Date'].max().date()
-        available_dates = data['Date'].dt.date.unique()
-        available_dates.sort()
+        available_dates = data['Date'].dropna().dt.date.unique()
+        available_dates = sorted(available_dates)
+    else:
+        available_dates = []
 
-        # Set the most recent date as default
-        if available_dates.size > 0:
-            default_date = available_dates[-1]
-            selected_date = st.selectbox("Date:", options=available_dates, index=len(available_dates) - 1)
+    if len(available_dates) > 0:
+        default_date = available_dates[-1]
+        selected_date = st.date_input(
+            "Date :",
+            value=default_date,
+            min_value=min(available_dates),
+            max_value=max(available_dates),
+            format="YYYY-MM-DD"
+        )
 
         filtered_data = data[data['Date'].dt.date == selected_date]
 
         if not filtered_data.empty:
-            # Select relevant columns
-            final_table = filtered_data[['Nom', 'Poids', 'MG %']]
+            # Poids ref pour chaque joueur
+            poids_ref_dict = data.groupby('Nom')['Poids'].min().to_dict()
+            final_table = filtered_data[['Nom', 'Poids', 'MG %']].copy()
+            final_table['Poids ref'] = final_table['Nom'].map(poids_ref_dict)
 
-            # Define the highlighting function for 'MG %'
+            # Highlight MG %
             def highlight_mg(val):
                 if val < 10:
                     return 'background-color: limegreen; text-align: center;'
@@ -141,26 +151,37 @@ if page == "Equipe":
                 else:
                     return 'background-color: tomato; text-align: center;'
 
-            # Apply the highlighting function to the 'MG %' column and center-align text
-            styled_table = final_table.style.applymap(highlight_mg, subset=['MG %']).format({'Poids': '{:.2f}', 'MG %': '{:.2f}'})
-            # Center-align all table cells (headers and data)
-            styled_table = styled_table.set_table_styles([
-                {'selector': 'th', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]},
-                {'selector': 'td', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]}
-            ])
+            # Highlight Poids (rouge si +2kg du ref)
+            def highlight_poids(row):
+                try:
+                    if (row['Poids'] - row['Poids ref']) >= 2:
+                        return ['background-color: tomato; text-align: center;' if col == 'Poids' else '' for col in final_table.columns]
+                    else:
+                        return ['text-align: center;' for _ in final_table.columns]
+                except Exception:
+                    return ['text-align: center;' for _ in final_table.columns]
 
-            # Calculate dynamic height for the table based on the number of rows
+            # Styling combiné
+            styled_table = (
+                final_table.style
+                    .applymap(highlight_mg, subset=['MG %'])
+                    .apply(highlight_poids, axis=1)
+                    .format({'Poids': '{:.2f}', 'MG %': '{:.2f}', 'Poids ref': '{:.2f}'})
+                    .set_table_styles([
+                        {'selector': 'th', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]},
+                        {'selector': 'td', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]}
+                    ])
+            )
+
             num_rows = len(final_table)
-            row_height = 35  # Approximate pixel height per row
-            table_height = max(400, num_rows * row_height)  # Minimum height of 400px
-
-            # Display the styled table
-            st.markdown(f"#### Suivi des Poids et MG % ({selected_date})")
+            row_height = 35
+            table_height = max(400, num_rows * row_height)
             st.dataframe(styled_table, use_container_width=True, height=table_height)
         else:
             st.warning("No data available for the selected date.")
     else:
         st.warning("No available dates with data.")
+
 
 elif page == "Joueurs":
     st.title("Fiche Joueur")
