@@ -335,18 +335,14 @@ if page == "Best performance":
 # --- Your other data loading and pre-processing goes above this ---
 elif page == "Entrainement":
 
-    # ── Try to import PDF libs ───────────────────────────────────────────────
-    try:
-        from reportlab.lib.pagesizes import landscape, A4
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Image, Paragraph, Spacer
-        from reportlab.lib import colors
-        from reportlab.lib.colors import HexColor
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        PDF_ENABLED = True
-    except ImportError:
-        PDF_ENABLED = False
+    # ========== OBJECTIVE FIELDS ==========
+    objective_fields = [
+        "RPE",
+        "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+    ]
 
-    # ── 0) Build Référence Match ──────────────────────────────────────────────
+    # ========== Reference Match ==========
     mask_match = data["Type"].fillna("").str.upper().str.strip() == "GAME"
     match_df_all = data[mask_match].copy()
     ref_fields = [
@@ -391,7 +387,7 @@ elif page == "Entrainement":
         else:
             Refmatch[c] = Refmatch[c].round(0).astype("Int64")
 
-    # ── 1) OBJECTIFS ENTRAÎNEMENT (single date) ────────────────────────────────
+    # ========== Entrainement Block ==========
     st.markdown("### 🎯 Entraînement")
     allowed_tasks = ["OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", "OPTI +", "OPTI J-1", "REATHLE", "MICRO"]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
@@ -399,365 +395,401 @@ elif page == "Entrainement":
     if valid_dates.empty:
         st.warning("Aucune date d'entraînement valide trouvée.")
         st.stop()
-    
+
     min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
-    
     sel_date = st.date_input(
         "Choisissez la date pour les objectifs",
         value=max_d,
         min_value=min_d,
         max_value=max_d
     )
-    
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
-    
-    # --- AM/PM filtering, robust ---
+
+    # ====== AM/PM/Total logic (ultra minimal, robust) ======
+# -- 1) Sélection AM/PM/Total et aggregation --
     if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
-        ampm_unique = sorted([str(x) for x in date_df["AMPM"].dropna().unique() if str(x).strip() != "" and str(x).lower() != "nan"])
-        if len(ampm_unique) > 1:
-            sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", ampm_unique, key="ampm")
-            date_df = date_df[date_df["AMPM"] == sel_ampm]
+        ampm_unique = sorted([
+            str(x) for x in date_df["AMPM"].dropna().unique()
+            if str(x).strip() != "" and str(x).lower() != "nan"
+        ])
+        options = ampm_unique.copy()
+        options.insert(0, "Total")
+        sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", options, key="ampm")
     
+        if sel_ampm == "Total":
+            # Nettoyage AVANT aggregation
+            num_cols = [c for c in date_df.columns if c in [
+                "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+                "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Distance 90% Vmax"
+            ]]
+            for c in num_cols + ["RPE", "Vmax"]:
+                if c in date_df.columns:
+                    date_df[c] = pd.to_numeric(
+                        date_df[c].astype(str).str.replace(r"[^\d\-,\.]", "", regex=True)
+                                       .str.replace(",", ".", regex=False)
+                                       .replace("", pd.NA), errors="coerce"
+                    )
+            agg_dict = {c: "sum" for c in num_cols}
+            for c in ["RPE", "Vmax"]:
+                if c in date_df.columns:
+                    agg_dict[c] = "mean"
+            filtered_df = date_df.groupby("Name", as_index=False).agg(agg_dict)
+        else:
+            filtered_df = date_df[date_df["AMPM"] == sel_ampm].copy()
+    else:
+        filtered_df = date_df.copy()
+    
+    if filtered_df.empty:
+        st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
+        st.stop()
+    
+    # --- Résumé JOURNÉE ---
+    erpe_col = next((c for c in filtered_df.columns if c.lower() == "rpe"), None)
+    if erpe_col is not None:
+        session_ERPE = pd.to_numeric(filtered_df[erpe_col], errors="coerce").mean()
+    else:
+        st.warning("Aucune colonne ERPE trouvée dans la séance sélectionnée.")
+        session_ERPE = float("nan")
+    
+    max_duration = pd.to_numeric(filtered_df["Duration"], errors="coerce").max(skipna=True) if "Duration" in filtered_df.columns else float("nan")
+    max_teffectif = pd.to_numeric(filtered_df["Teffectif"], errors="coerce").max(skipna=True) if "Teffectif" in filtered_df.columns else float("nan")
+    
+    try:
+        if pd.notna(max_duration) and max_duration > 0 and pd.notna(max_teffectif):
+            indicateur = float(max_teffectif) * 100 / float(max_duration)
+        else:
+            indicateur = 0
+    except Exception:
+        indicateur = 0
+    
+    st.markdown(
+        f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
+        f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
+        f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
+        f"RPE estimé : <b>{session_ERPE:.1f}</b> &nbsp; | &nbsp; "
+        f"Indicateur : <b>{indicateur:.1f}%</b>",
+        unsafe_allow_html=True
+    )
+    
+    # --- La suite de ton code (table, etc.) utilise filtered_df ---
+
+
     if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
-    else:
-        # ==== CALCUL TEMPS EFFECTIF & INDICATEUR ====
-        max_duration = pd.to_numeric(date_df["Duration"], errors="coerce").max(skipna=True)
-        max_teffectif = pd.to_numeric(date_df["Teffectif"], errors="coerce").max(skipna=True)
-        # Handle nan and type errors
-        try:
-            if pd.notna(max_duration) and max_duration > 0 and pd.notna(max_teffectif):
-                indicateur = float(max_teffectif) * 100 / float(max_duration)
-            else:
-                indicateur = 0
-        except Exception as e:
-            indicateur = 0
-    
-        st.markdown(
-            f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
-            f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
-            f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
-            f"Indicateur : <b>{indicateur:.1f}%</b>",
-            unsafe_allow_html=True
+        st.stop()
+
+    # ========== TABLE + POURCENTAGE + MOYENNES ==========
+    df_ent = date_df[["Name"] + [col for col in objective_fields if col in date_df.columns]].copy()
+    for c in objective_fields:
+        if c not in df_ent.columns:
+            continue
+        cleaned = (
+            df_ent[c].astype(str)
+                     .str.replace(r"[^\d\-,\.]", "", regex=True)
+                     .str.replace(",", ".", regex=False)
+                     .replace("", pd.NA)
         )
-            
-        # RPE ajouté en premier
-        objective_fields = [
-            "RPE",
-            "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-            "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-        ]
-    
-        objectives = {}
-        # Pour le style : sliders pour tous sauf RPE (qui n'a pas d'objectif %)
-        row1, row2 = objective_fields[1:6], objective_fields[6:]
-        cols5 = st.columns(5)
-        for cont, stat in zip(cols5, row1):
-            with cont:
-                objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
-        cols5 = st.columns(5)
-        for cont, stat in zip(cols5, row2):
-            with cont:
-                objectives[stat] = st.slider(stat, 0, 100, 100, key=f"obj_ent_{stat}")
-    
-        df_ent = date_df[["Name"] + objective_fields].copy()
-        for c in objective_fields:
-            cleaned = (
-                df_ent[c].astype(str)
-                         .str.replace(r"[^\d\-,\.]", "", regex=True)
-                         .str.replace(",", ".", regex=False)
-                         .replace("", pd.NA)
-            )
-            num = pd.to_numeric(cleaned, errors="coerce")
-            df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
-    
-        ref_idx = Refmatch.set_index("Name")
-        for c in objective_fields:
-            if c == "RPE":
-                continue  # Pas de colonne % pour RPE
-            df_ent[f"{c} %"] = df_ent.apply(
-                lambda r: round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
-                if (r["Name"] in ref_idx.index and pd.notna(r[c]) and pd.notna(ref_idx.at[r["Name"], c]) and ref_idx.at[r["Name"], c] > 0)
-                else pd.NA,
-                axis=1
-            )
+        num = pd.to_numeric(cleaned, errors="coerce")
+        df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
 
-        mean_data = {"Name": "Moyenne"}
-        for c in objective_fields:
-            raw_mean = df_ent[c].mean(skipna=True)
+    ref_idx = Refmatch.set_index("Name")
+    for c in objective_fields:
+        if c not in df_ent.columns: continue
+        if c == "RPE":
+            continue
+        pct_col = f"{c} %"
+        df_ent[pct_col] = df_ent.apply(
+            lambda r: round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
+            if (r["Name"] in ref_idx.index and pd.notna(r[c]) and pd.notna(ref_idx.at[r["Name"], c]) and ref_idx.at[r["Name"], c] > 0)
+            else pd.NA,
+            axis=1
+        )
+
+    mean_data = {"Name": "Moyenne"}
+    for c in objective_fields:
+        if c not in df_ent.columns:
+            continue
+        raw_mean = df_ent[c].mean(skipna=True)
+        if pd.isna(raw_mean):
+            mean_data[c] = pd.NA  # ou "" si tu veux afficher vide
+        else:
             mean_data[c] = round(raw_mean, 1) if c == "Vmax" else int(round(raw_mean, 0))
-            if c != "RPE":
-                pct_mean = df_ent[f"{c} %"].mean(skipna=True)
-                mean_data[f"{c} %"] = round(pct_mean, 1)
-        df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
+        if c != "RPE":
+            pct_col = f"{c} %"
+            if pct_col in df_ent.columns:
+                pct_mean = df_ent[pct_col].mean(skipna=True)
+                mean_data[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
 
-        df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
-        overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
-        players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
+    df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
 
-        pos_order = ["ATT", "DC", "M", "PIS", "PIST"]
-        grouped = []
-        for pos in pos_order:
-            grp = players_only[players_only["Pos"] == pos].sort_values("Name")
-            if grp.empty: continue
-            grouped.append(grp)
-            mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
-            for c in objective_fields:
-                vals = grp[c]
-                mean_vals[c] = round(vals.mean(skipna=True), 1) if c == "Vmax" else int(round(vals.mean(skipna=True), 0))
-                if c != "RPE":
-                    mean_vals[f"{c} %"] = round(grp[f"{c} %"].mean(skipna=True), 1)
-            grouped.append(pd.DataFrame([mean_vals]))
-        others = players_only[~players_only["Pos"].isin(pos_order)].sort_values("Name")
-        if not others.empty: grouped.append(others)
-        grouped.append(overall_mean)
-        df_sorted = pd.concat(grouped, ignore_index=True)
-        df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
-
-        # explicitly list the columns in the desired order, RPE left
-        display_cols = [
-            "RPE", "Name", "Pos",
-            "Duration", "Duration %",
-            "Distance", "Distance %",
-            "Distance 15km/h", "Distance 15km/h %",
-            "Distance 15-20km/h", "Distance 15-20km/h %",
-            "Distance 20-25km/h", "Distance 20-25km/h %",
-            "Distance 25km/h", "Distance 25km/h %",
-            "Vmax", "Vmax %",
-            "Distance 90% Vmax", "Distance 90% Vmax %",
-            "Acc", "Acc %",
-            "Dec", "Dec %",
-        ]
-        # Ne garde que les colonnes existantes
-        display_cols = [c for c in display_cols if c in df_sorted.columns]
-        df_display = df_sorted.loc[:, display_cols]
-
-        def alternate_colors(row):
-            if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
-            color = '#EDE8E8' if row.name % 2 == 0 else 'white'
-            return [f'background-color:{color}'] * len(display_cols)
-
-        def highlight_moyenne(row):
-            if row['Name'] == 'Moyenne':
-                return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
-            elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
-                return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
-            return [''] * len(display_cols)
-
-        def hl(v, obj):
-            if pd.isna(v): return ""
-            d = abs(v - obj)
-            if d <= 5: return "background-color:#c8e6c9;"
-            if d <= 10: return "background-color:#fff9c4;"
-            if d <= 15: return "background-color:#ffe0b2;"
-            if d <= 100: return "background-color:#ffcdd2;"
-            return ""
-
-        styled = df_display.style
-        styled = styled.apply(alternate_colors, axis=1)
-        styled = styled.apply(highlight_moyenne, axis=1)
-        style_formats = {}
+    # ====== Tri, couleurs, affichage ======
+    df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
+    overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
+    players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
+    pos_order = ["DC", "M", "PIS", "M", "ATT"]
+    grouped = []
+    for pos in pos_order:
+        grp = players_only[players_only["Pos"] == pos].sort_values("Name")
+        if grp.empty: continue
+        grouped.append(grp)
+        mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
         for c in objective_fields:
-            if c != "RPE":
-                style_formats[f"{c} %"] = "{:.1f} %"
-            elif c == "Vmax":
-                style_formats[c] = "{:.1f}"
+            if c not in grp.columns: continue
+            vals = grp[c]
+            moy = vals.mean(skipna=True)
+            if pd.isna(moy):
+                mean_vals[c] = pd.NA
             else:
-                style_formats[c] = "{:.0f}"
-        styled = styled.format(style_formats)
+                mean_vals[c] = round(moy, 1) if c == "Vmax" else int(round(moy, 0))
+            if c != "RPE":
+                pct_col = f"{c} %"
+                if pct_col in grp.columns:
+                    pct_mean = grp[pct_col].mean(skipna=True)
+                    mean_vals[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
+        grouped.append(pd.DataFrame([mean_vals]))
 
-        # Coloration pour les colonnes % (sauf RPE % qui n'existe pas)
-        for stat in objective_fields:
-            if stat == "RPE":
-                continue
-            def fn(row, stat=stat):
-                if row['Name'].startswith("Moyenne ") and row['Name'] != "Moyenne":
-                    return [f"background-color:#CFB013; color:#000;" if col == f"{stat} %" else "" for col in row.index]
-                elif row['Name'] == "Moyenne":
-                    return ["" for col in row.index]
+    df_sorted = pd.concat(grouped, ignore_index=True)
+    df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
+
+    display_cols = [
+        "RPE", "Name", "Pos",
+        "Duration", "Duration %",
+        "Distance", "Distance %",
+        "Distance 15km/h", "Distance 15km/h %",
+        "Distance 15-20km/h", "Distance 15-20km/h %",
+        "Distance 20-25km/h", "Distance 20-25km/h %",
+        "Distance 25km/h", "Distance 25km/h %",
+        "Vmax", "Vmax %",
+        "Distance 90% Vmax", "Distance 90% Vmax %",
+        "Acc", "Acc %",
+        "Dec", "Dec %",
+    ]
+    display_cols = [c for c in display_cols if c in df_sorted.columns]
+    df_display = df_sorted.loc[:, display_cols]
+
+    def alternate_colors(row):
+        if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
+        color = '#EDE8E8' if row.name % 2 == 0 else 'white'
+        return [f'background-color:{color}'] * len(display_cols)
+
+    def highlight_moyenne(row):
+        if row['Name'] == 'Moyenne':
+            return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
+        elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+            return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
+        return [''] * len(display_cols)
+
+    def hl(v, obj):
+        if pd.isna(v): return ""
+        d = abs(v - obj)
+        if d <= 5: return "background-color:#c8e6c9;"
+        if d <= 10: return "background-color:#fff9c4;"
+        if d <= 15: return "background-color:#ffe0b2;"
+        if d <= 100: return "background-color:#ffcdd2;"
+        return ""
+
+    styled = df_display.style
+    styled = styled.apply(alternate_colors, axis=1)
+    styled = styled.apply(highlight_moyenne, axis=1)
+    style_formats = {}
+    for c in objective_fields:
+        if f"{c} %" in df_display.columns:
+            style_formats[f"{c} %"] = "{:.1f} %"
+        if c == "Vmax":
+            style_formats[c] = "{:.1f}"
+        elif c in df_display.columns:
+            style_formats[c] = "{:.0f}"
+    styled = styled.format(style_formats)
+
+    for stat in objective_fields:
+        if f"{stat} %" not in df_display.columns: continue
+        def fn(row, stat=stat):
+            if row['Name'].startswith("Moyenne ") and row['Name'] != "Moyenne":
+                return [f"background-color:#CFB013; color:#000;" if col == f"{stat} %" else "" for col in row.index]
+            elif row['Name'] == "Moyenne":
+                return ["" for col in row.index]
+            else:
+                return [hl(row[f"{stat} %"], 100) if col == f"{stat} %" else "" for col in row.index]
+        styled = styled.apply(fn, axis=1)
+
+    styled = styled.set_table_styles([
+        {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
+        {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
+        {'selector': 'th.blank', 'props': 'display:none;'}
+    ], overwrite=False)
+    styled = styled.set_table_attributes('class="centered-table"')
+
+    def rpe_color(val, vmin=1, vmax=10):
+        if pd.isna(val): return ""
+        try:
+            norm = (float(val) - vmin) / (vmax - vmin)
+            norm = min(max(norm, 0), 1)
+            color = mcolors.rgb2hex(cmap(norm))
+            return f"background-color:{color};"
+        except:
+            return ""
+    styled = styled.applymap(rpe_color, subset=["RPE"])
+
+    import re
+    html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
+
+    total_rows = df_sorted.shape[0] + 1
+    header_height = 30
+    row_height = 28
+    iframe_height = header_height + total_rows * row_height
+
+    wrapper = f"""
+    <html>
+      <head>
+        <style>
+          .centered-table{{border-collapse:collapse;width:100%;}}
+          .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
+          .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
+          .centered-table th, .centered-table td {{border:1px solid #ddd;}}
+          .centered-table th{{background-color:#0031E3;color:white;}}
+        </style>
+      </head>
+      <body>{html_obj}</body>
+    </html>
+    """
+    components.html(wrapper, height=iframe_height, scrolling=False)
+
+
+    # ── Export PDF with same colored table fit to A4 landscape ───────────────
+    if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
+        styles = getSampleStyleSheet()
+        normal = styles["Normal"]
+
+        # Header
+        hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
+        resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
+        logo = Image(io.BytesIO(resp.content), width=40, height=40)
+        hdr_data = [
+            Paragraph("<b>Données GPS - Séance du :</b>", hdr_style),
+            Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
+            logo
+        ]
+        hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
+        hdr_tbl.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+            ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
+        ]))
+
+        # Build PDF table data
+        data_pdf = [list(df_display.columns)]
+        for _, row in df_display.iterrows():
+            vals = []
+            for c in df_display.columns:
+                val = row[c]
+                if isinstance(val, float) and c == 'Vmax':
+                    vals.append(f"{val:.1f}")
+                elif isinstance(val, float) and c.endswith('%'):
+                    vals.append(f"{val:.1f} %")
+                elif isinstance(val, (int, np.integer)):
+                    vals.append(f"{val:d}")
+                elif pd.isna(val):
+                    vals.append("")
                 else:
-                    return [hl(row[f"{stat} %"], objectives[stat]) if col == f"{stat} %" else "" for col in row.index]
-            styled = styled.apply(fn, axis=1)
+                    vals.append(str(val))
+            data_pdf.append(vals)
 
-        styled = styled.set_table_styles([
-            {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
-            {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
-            {'selector': 'th.blank', 'props': 'display:none;'}
-        ], overwrite=False)
-        styled = styled.set_table_attributes('class="centered-table"')
+        # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
+        cell_styles = []
+        nrows = len(data_pdf)
+        ncols = len(data_pdf[0])
+        for row_idx in range(1, nrows):  # skip header
+            row = df_display.iloc[row_idx - 1]
+            for col_idx, col in enumerate(df_display.columns):
+                cell_color = None
+                cell_text_color = None
         
-        def rpe_color(val, vmin=1, vmax=10):
-            if pd.isna(val): return ""
-            try:
-                norm = (float(val) - vmin) / (vmax - vmin)
-                norm = min(max(norm, 0), 1)
-                color = mcolors.rgb2hex(cmap(norm))
-                return f"background-color:{color};"
-            except:
-                return ""
-        styled = styled.applymap(rpe_color, subset=["RPE"])
-
-
-    
-        html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
-
-        # ── STREAMLIT HTML RENDER (auto-height to show all rows) ──────────────
-        total_rows = df_sorted.shape[0] + 1            # +1 for the header
-        header_height = 30                             # px
-        row_height = 28                                # px per row
-        iframe_height = header_height + total_rows * row_height
-
-        wrapper = f"""
-        <html>
-          <head>
-            <style>
-              .centered-table{{border-collapse:collapse;width:100%;}}
-              .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
-              .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
-              .centered-table th, .centered-table td {{border:1px solid #ddd;}}
-              .centered-table th{{background-color:#0031E3;color:white;}}
-            </style>
-          </head>
-          <body>{html_obj}</body>
-        </html>
-        """
-        components.html(wrapper, height=iframe_height, scrolling=False)
-
-        # ── Export PDF with same colored table fit to A4 landscape ───────────────
-        if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
-            buf = io.BytesIO()
-            doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                                    rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
-            styles = getSampleStyleSheet()
-            normal = styles["Normal"]
-
-            # Header
-            hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
-            resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
-            logo = Image(io.BytesIO(resp.content), width=40, height=40)
-            hdr_data = [
-                Paragraph("<b>Données GPS - Séance du :</b>", hdr_style),
-                Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
-                logo
-            ]
-            hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
-            hdr_tbl.setStyle(TableStyle([
-                ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-                ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-                ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
-            ]))
-
-            # Build PDF table data
-            data_pdf = [list(df_display.columns)]
-            for _, row in df_display.iterrows():
-                vals = []
-                for c in df_display.columns:
-                    val = row[c]
-                    if isinstance(val, float) and c == 'Vmax':
-                        vals.append(f"{val:.1f}")
-                    elif isinstance(val, float) and c.endswith('%'):
-                        vals.append(f"{val:.1f} %")
-                    elif isinstance(val, (int, np.integer)):
-                        vals.append(f"{val:d}")
-                    elif pd.isna(val):
-                        vals.append("")
-                    else:
-                        vals.append(str(val))
-                data_pdf.append(vals)
-
-            # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
-            cell_styles = []
-            nrows = len(data_pdf)
-            ncols = len(data_pdf[0])
-            for row_idx in range(1, nrows):  # skip header
-                row = df_display.iloc[row_idx - 1]
-                for col_idx, col in enumerate(df_display.columns):
-                    cell_color = None
-                    cell_text_color = None
-            
-                    # ---------- PRIORITÉ : RPE couleur ----------
-                    if col == "RPE" and pd.notna(row["RPE"]):
-                        val = float(row["RPE"])
-                        norm = (val - 1) / (10 - 1)
-                        norm = min(max(norm, 0), 1)
-                        color = mcolors.rgb2hex(cmap(norm))
-                        cell_color = color
-                        cell_text_color = "#000000"
-            
-                    # ---------- Moyenne (SURCHARGE) ----------
-                    elif row['Name'] == 'Moyenne':
-                        cell_color = '#EDE8E8'
-                        cell_text_color = '#0031E3'
-            
-                    elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
-                        cell_color = '#CFB013'
-                        cell_text_color = '#000000'
-            
-                    # ---------- % columns (objective coloring) ----------
-                    elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
-                        stat = col.replace(' %', '')
-                        val = row[col]
-                        obj = objectives.get(stat, None)
-                        if pd.notna(val) and obj is not None:
-                            d = abs(val - obj)
-                            if d <= 5:
-                                cell_color = '#c8e6c9'
-                            elif d <= 10:
-                                cell_color = '#fff9c4'
-                            elif d <= 15:
-                                cell_color = '#ffe0b2'
-                            else:
-                                cell_color = '#ffcdd2'
-            
-                    # ---------- Alternance pour tout le reste ----------
-                    if cell_color is None:
-                        cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
-                    # PDF style
+                # ---------- PRIORITÉ : RPE couleur ----------
+                if col == "RPE" and pd.notna(row["RPE"]):
+                    val = float(row["RPE"])
+                    norm = (val - 1) / (10 - 1)
+                    norm = min(max(norm, 0), 1)
+                    color = mcolors.rgb2hex(cmap(norm))
+                    cell_color = color
+                    cell_text_color = "#000000"
+        
+                # ---------- Moyenne (SURCHARGE) ----------
+                elif row['Name'] == 'Moyenne':
+                    cell_color = '#EDE8E8'
+                    cell_text_color = '#0031E3'
+        
+                elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+                    cell_color = '#CFB013'
+                    cell_text_color = '#000000'
+        
+                # ---------- % columns (objective coloring) ----------
+                elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
+                    stat = col.replace(' %', '')
+                    val = row[col]
+                    obj = objectives.get(stat, None)
+                    if pd.notna(val) and obj is not None:
+                        d = abs(val - obj)
+                        if d <= 5:
+                            cell_color = '#c8e6c9'
+                        elif d <= 10:
+                            cell_color = '#fff9c4'
+                        elif d <= 15:
+                            cell_color = '#ffe0b2'
+                        else:
+                            cell_color = '#ffcdd2'
+        
+                # ---------- Alternance pour tout le reste ----------
+                if cell_color is None:
+                    cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
+                # PDF style
+                try:
+                    cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+                except:
+                    pass
+                if cell_text_color:
                     try:
-                        cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_text_color)))
                     except:
                         pass
-                    if cell_text_color:
-                        try:
-                            cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_text_color)))
-                        except:
-                            pass
-                    elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
-                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
+                elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+                    cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
 
 
 
-            # Header row style
-            cell_styles += [
-                ('BACKGROUND', (0, 0), (-1, 0), HexColor('#0031E3')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold')
-            ]
-            
-            base_styles = [
-                ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, 0), 4),
-                ('FONTSIZE', (0, 1), (-1, -1), 6),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 2),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-                ('TOPPADDING', (0, 0), (-1, -1), 2),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-            ]
-            
-            pdf_tbl = Table(data_pdf, colWidths=[doc.width / ncols] * ncols, repeatRows=1)
-            pdf_tbl.hAlign = 'CENTER'
-            pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
-            
-            elements = [hdr_tbl, Spacer(1, 8), pdf_tbl]
-            doc.build(elements)
-            st.download_button(
-                label="📥 Télécharger le PDF", data=buf.getvalue(),
-                file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
-            )
+        # Header row style
+        cell_styles += [
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#0031E3')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold')
+        ]
+        
+        base_styles = [
+            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, 0), 4),
+            ('FONTSIZE', (0, 1), (-1, -1), 6),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 2),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]
+        
+        pdf_tbl = Table(data_pdf, colWidths=[doc.width / ncols] * ncols, repeatRows=1)
+        pdf_tbl.hAlign = 'CENTER'
+        pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
+        
+        elements = [hdr_tbl, Spacer(1, 8), pdf_tbl]
+        doc.build(elements)
+        st.download_button(
+            label="📥 Télécharger le PDF", data=buf.getvalue(),
+            file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
+        )
                                                                      
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
 
