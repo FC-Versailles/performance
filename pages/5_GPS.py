@@ -401,13 +401,16 @@ elif page == "Entrainement":
 
     # ========== Entrainement Block ==========
     st.markdown("### 🎯 Entraînement")
-    allowed_tasks = ["OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", "OPTI +", "OPTI J-1", "REATHLE", "MICRO"]
+    allowed_tasks = [
+        "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
+        "OPTI +", "OPTI J-1", "REATHLE", "MICRO"
+    ]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     valid_dates = train_data["Date"].dropna()
     if valid_dates.empty:
         st.warning("Aucune date d'entraînement valide trouvée.")
         st.stop()
-
+    
     min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
     sel_date = st.date_input(
         "Choisissez la date pour les objectifs",
@@ -416,9 +419,8 @@ elif page == "Entrainement":
         max_value=max_d
     )
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
-
+    
     # ====== AM/PM/Total logic (ultra minimal, robust) ======
-# -- 1) Sélection AM/PM/Total et aggregation --
     if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
         ampm_unique = sorted([
             str(x) for x in date_df["AMPM"].dropna().unique()
@@ -483,13 +485,23 @@ elif page == "Entrainement":
         unsafe_allow_html=True
     )
     
-    # --- La suite de ton code (table, etc.) utilise filtered_df ---
-
-
-    if date_df.empty:
-        st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
-        st.stop()
-
+    # ========== SLIDERS OBJECTIVES POUR % ==========
+    objective_fields = [
+        "RPE", "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+    ]
+    obj_vars = [c for c in objective_fields if c != "RPE"]
+    row1, row2 = obj_vars[:5], obj_vars[5:]
+    objectives = {}
+    cols5 = st.columns(5)
+    for i, stat in enumerate(row1):
+        with cols5[i]:
+            objectives[stat] = st.slider(f"{stat} (%)", 0, 150, 100, key=f"obj_{stat}")
+    cols5b = st.columns(5)
+    for i, stat in enumerate(row2):
+        with cols5b[i]:
+            objectives[stat] = st.slider(f"{stat} (%)", 0, 150, 100, key=f"obj_{stat}")
+    
     # ========== TABLE + POURCENTAGE + MOYENNES ==========
     df_ent = filtered_df[["Name"] + [col for col in objective_fields if col in filtered_df.columns]].copy()
     for c in objective_fields:
@@ -503,7 +515,7 @@ elif page == "Entrainement":
         )
         num = pd.to_numeric(cleaned, errors="coerce")
         df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
-
+    
     ref_idx = Refmatch.set_index("Name")
     for c in objective_fields:
         if c not in df_ent.columns: continue
@@ -516,14 +528,14 @@ elif page == "Entrainement":
             else pd.NA,
             axis=1
         )
-
+    
     mean_data = {"Name": "Moyenne"}
     for c in objective_fields:
         if c not in df_ent.columns:
             continue
         raw_mean = df_ent[c].mean(skipna=True)
         if pd.isna(raw_mean):
-            mean_data[c] = pd.NA  # ou "" si tu veux afficher vide
+            mean_data[c] = pd.NA
         else:
             mean_data[c] = round(raw_mean, 1) if c == "Vmax" else int(round(raw_mean, 0))
         if c != "RPE":
@@ -531,9 +543,9 @@ elif page == "Entrainement":
             if pct_col in df_ent.columns:
                 pct_mean = df_ent[pct_col].mean(skipna=True)
                 mean_data[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
-
+    
     df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
-
+    
     # ====== Tri, couleurs, affichage ======
     df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
     overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
@@ -559,10 +571,10 @@ elif page == "Entrainement":
                     pct_mean = grp[pct_col].mean(skipna=True)
                     mean_vals[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
         grouped.append(pd.DataFrame([mean_vals]))
-
+    
     df_sorted = pd.concat(grouped, ignore_index=True)
     df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
-
+    
     display_cols = [
         "RPE", "Name", "Pos",
         "Duration", "Duration %",
@@ -578,19 +590,19 @@ elif page == "Entrainement":
     ]
     display_cols = [c for c in display_cols if c in df_sorted.columns]
     df_display = df_sorted.loc[:, display_cols]
-
+    
     def alternate_colors(row):
         if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
         color = '#EDE8E8' if row.name % 2 == 0 else 'white'
         return [f'background-color:{color}'] * len(display_cols)
-
+    
     def highlight_moyenne(row):
         if row['Name'] == 'Moyenne':
             return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
-        elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+        elif row['Name'].startswith('Moyenne ') and row['Name'] != "Moyenne":
             return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
         return [''] * len(display_cols)
-
+    
     def hl(v, obj):
         if pd.isna(v): return ""
         d = abs(v - obj)
@@ -599,7 +611,7 @@ elif page == "Entrainement":
         if d <= 15: return "background-color:#ffe0b2;"
         if d <= 100: return "background-color:#ffcdd2;"
         return ""
-
+    
     styled = df_display.style
     styled = styled.apply(alternate_colors, axis=1)
     styled = styled.apply(highlight_moyenne, axis=1)
@@ -613,25 +625,20 @@ elif page == "Entrainement":
             style_formats[c] = "{:.0f}"
     styled = styled.format(style_formats)
     
-    objectives = {}
-    for stat in objective_fields:
-        if f"{stat} %" not in df_display.columns: continue
-        def fn(row, stat=stat):
-            if row['Name'].startswith("Moyenne ") and row['Name'] != "Moyenne":
-                return [f"background-color:#CFB013; color:#000;" if col == f"{stat} %" else "" for col in row.index]
-            elif row['Name'] == "Moyenne":
-                return ["" for col in row.index]
-            else:
-                return [hl(row[f"{stat} %"], 100) if col == f"{stat} %" else "" for col in row.index]
-        styled = styled.apply(fn, axis=1)
-
+    # === apply custom coloring to % columns using sliders ===
+    for stat in obj_vars:
+        pct_col = f"{stat} %"
+        if pct_col in df_display.columns:
+            obj = objectives.get(stat, 100)
+            styled = styled.applymap(lambda v, obj=obj: hl(v, obj), subset=[pct_col])
+    
     styled = styled.set_table_styles([
         {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
         {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
         {'selector': 'th.blank', 'props': 'display:none;'}
     ], overwrite=False)
     styled = styled.set_table_attributes('class="centered-table"')
-
+    
     def rpe_color(val, vmin=1, vmax=10):
         if pd.isna(val): return ""
         try:
@@ -642,15 +649,15 @@ elif page == "Entrainement":
         except:
             return ""
     styled = styled.applymap(rpe_color, subset=["RPE"])
-
+    
     import re
     html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
-
+    
     total_rows = df_sorted.shape[0] + 1
     header_height = 30
     row_height = 28
     iframe_height = header_height + total_rows * row_height
-
+    
     wrapper = f"""
     <html>
       <head>
@@ -666,6 +673,7 @@ elif page == "Entrainement":
     </html>
     """
     components.html(wrapper, height=iframe_height, scrolling=False)
+
 
 
     # ── Export PDF with same colored table fit to A4 landscape ───────────────
