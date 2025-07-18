@@ -491,7 +491,7 @@ elif page == "Entrainement":
         st.stop()
 
     # ========== TABLE + POURCENTAGE + MOYENNES ==========
-    df_ent = date_df[["Name"] + [col for col in objective_fields if col in date_df.columns]].copy()
+    df_ent = filtered_df[["Name"] + [col for col in objective_fields if col in filtered_df.columns]].copy()
     for c in objective_fields:
         if c not in df_ent.columns:
             continue
