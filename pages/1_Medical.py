@@ -27,11 +27,11 @@ import base64
 import plotly.graph_objects as go
 
 
-# Constants for Google Sheets
+# ... other imports ...
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE = 'token_med.pickle'
-SPREADSHEET_ID = '1UP1kzcTX7hexglokW2b-INUXPamk7zEHB5e0ha5_1fs'  # Replace with your actual Spreadsheet ID
-RANGE_NAME = 'Feuille 1'
+TOKEN_FILE_MED = 'token_med.pickle'
+SPREADSHEET_ID_MED = '1UP1kzcTX7hexglokW2b-INUXPamk7zEHB5e0ha5_1fs'
+RANGE_NAME_MED = 'Feuille 1'
 
 st.set_page_config(layout='wide')
 
@@ -46,11 +46,12 @@ with col2:
 # Add a horizontal line to separate the header
 st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
+
 # Function to get Google Sheets credentials
-def get_credentials():
+def get_medical_credentials():
     creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'rb') as token:
+    if os.path.exists(TOKEN_FILE_MED):
+        with open(TOKEN_FILE_MED, 'rb') as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -60,13 +61,13 @@ def get_credentials():
                 'client_secret.json', SCOPES
             )
             creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'wb') as token:
+        with open(TOKEN_FILE_MED, 'wb') as token:
             pickle.dump(creds, token)
     return creds
 
 # Function to fetch data from Google Sheet
-def fetch_google_sheet(spreadsheet_id, range_name):
-    creds = get_credentials()
+def fetch_medical_google_sheet(spreadsheet_id, range_name):
+    creds = get_medical_credentials()
     service = build('sheets', 'v4', credentials=creds)
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
@@ -84,13 +85,12 @@ def fetch_google_sheet(spreadsheet_id, range_name):
     return pd.DataFrame(adjusted_data, columns=header)
 
 
-# Load data from Google Sheets
 @st.cache_data(ttl=60)
-def load_data():
-    return fetch_google_sheet(SPREADSHEET_ID, RANGE_NAME)
+def load_medical_data():
+    return fetch_medical_google_sheet(SPREADSHEET_ID_MED, RANGE_NAME_MED)
 
+df = load_medical_data()
 
-df = load_data()
 
 df = df[~df['Nom'].isin(['Agoro', 'Bangoura', 'Mbala','Karamoko'])]
 
