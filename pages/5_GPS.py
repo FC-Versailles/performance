@@ -550,11 +550,15 @@ elif page == "Entrainement":
     df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
     overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
     players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
-    pos_order = ["DC", "M", "PIS", "M", "ATT"]
+    # Ajoute cette ligne AVANT la boucle des groupes
+    players_only["Pos"] = players_only["Pos"].fillna("NC")  # 'NC' = non classé
+    
+    pos_order = ["DC", "M", "PIS", "ATT", "NC"]  # "NC" à la fin pour capturer les joueurs sans position
     grouped = []
     for pos in pos_order:
         grp = players_only[players_only["Pos"] == pos].sort_values("Name")
-        if grp.empty: continue
+        if grp.empty:
+            continue
         grouped.append(grp)
         mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
         for c in objective_fields:
@@ -572,6 +576,9 @@ elif page == "Entrainement":
                     mean_vals[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
         grouped.append(pd.DataFrame([mean_vals]))
     
+    if not grouped:
+        st.info("Aucun joueur dans les positions attendues. Vérifiez vos filtres ou vos données.")
+        st.stop()
     df_sorted = pd.concat(grouped, ignore_index=True)
     df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
     
