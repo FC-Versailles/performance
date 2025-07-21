@@ -259,10 +259,11 @@ elif page == "Rapport Quotidien":
     all_players = df['Nom'].dropna().unique()
     total_players = len(all_players)
     
+    dai_data = df[df['Date'].dt.date == selected_date]
     # Players unavailable today
-    maladie_today = daily_data[daily_data['Motif consultation'].str.lower() == 'maladie']['Nom'].dropna().unique()
-    rtp_today = daily_data[daily_data['Motif consultation'].str.lower() == 'réathlétisation']['Nom'].dropna().unique()
-    absent_today = daily_data[daily_data['Motif consultation'].str.lower() == 'absent']['Nom'].dropna().unique()
+    maladie_today = dai_data[dai_data['Motif consultation'].str.lower() == 'maladie']['Nom'].dropna().unique()
+    rtp_today = dai_data[dai_data['Motif consultation'].str.lower() == 'réathlétisation']['Nom'].dropna().unique()
+    absent_today = dai_data[dai_data['Motif consultation'].str.lower() == 'absent']['Nom'].dropna().unique()
     
     # Combine both unavailabilities
     unavailable_players = set(maladie_today).union(set(rtp_today)).union(set(absent_today))
@@ -318,7 +319,7 @@ elif page == "Rapport Quotidien":
     # Affichage par motif
     for motif in ['Absent', 'Adaptation', 'Réathlétisation', 'Soins', 'Prevention', 'Renforcement', 'Maladie']:
         st.write(f"**{motif}**")
-        motif_data = daily_data[daily_data['Motif consultation'].str.lower() == motif.lower()]
+        motif_data = dai_data[dai_data['Motif consultation'].str.lower() == motif.lower()]
         if not motif_data.empty:
             columns_to_display = motif_columns.get(motif, ['Nom', 'Remarque'])  # fallback
             available_columns = [col for col in columns_to_display if col in motif_data.columns]
