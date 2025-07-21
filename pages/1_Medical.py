@@ -208,56 +208,53 @@ elif page == "Rapport Quotidien":
 
     # Filtrer les données du jour sélectionné
     daily_data = df[df['Date'].dt.date == selected_date]
-        
-    display_columns = [
-        'Nom',
-        'Localisation du soin',
-        'Consultant',
-        'Soins',
-        'Alertes',
-        'Incertitudes',
-        'Remarque',  # Will be renamed to 'Blessés'
-    ]
-    column_rename = {
-        'Nom': 'Nom',
-        'Localisation du soin': 'Localisation',
-        'Consultant': 'Consultant',
-        'Soins': 'Soins',
-        'Alertes': 'Alertes',
-        'Incertitudes': 'Incertitudes',
-        'Remarque': 'Blessés',
-    }
+    daily_data = daily_data[daily_data['Motif consultation'] == "Rapport"]
     
-    # Filter columns
-    ordered_cols = [col for col in display_columns if col in daily_data.columns]
-    rapport_table = daily_data[ordered_cols].copy().rename(columns=column_rename)
+    if daily_data.empty:
+        st.write("Pas de rapport médical aujourd'hui")
+    else:
+        display_columns = [
+            'Nom',
+            'Localisation du soin',
+            'Consultant',
+            'Soins',
+            'Alertes',
+            'Incertitudes',
+            'Remarque',  # Will be renamed to 'Blessés'
+        ]
+        column_rename = {
+            'Nom': 'Nom',
+            'Localisation du soin': 'Localisation',
+            'Consultant': 'Consultant',
+            'Soins': 'Soins',
+            'Alertes': 'Alertes',
+            'Incertitudes': 'Incertitudes',
+            'Remarque': 'Blessés',
+        }
     
-    # Drop any Unnamed column (CSV artifact)
-    rapport_table = rapport_table.loc[:, ~rapport_table.columns.str.contains('^Unnamed')]
-    # Reset index, drop any index name
-    rapport_table.index = range(len(rapport_table))
-    rapport_table.index.name = None
+        ordered_cols = [col for col in display_columns if col in daily_data.columns]
+        rapport_table = daily_data[ordered_cols].copy().rename(columns=column_rename)
     
-    def render_colored_table_centered(df):
-        # Start table with centered text
-        html = '<table style="border-collapse:collapse;width:100%;">'
-        # Header row
-        html += '<tr style="background-color:#0031E3;color:#fff;text-align:center;">'
-        for col in df.columns:
-            html += f'<th style="padding:8px;border:1px solid #ddd;text-align:center;">{col}</th>'
-        html += '</tr>'
-        # Data rows
-        for _, row in df.iterrows():
-            html += '<tr>'
-            for cell in row:
-                html += f'<td style="padding:8px;border:1px solid #ddd;text-align:center;">{cell if pd.notna(cell) else ""}</td>'
+        rapport_table = rapport_table.loc[:, ~rapport_table.columns.str.contains('^Unnamed')]
+        rapport_table.index = range(len(rapport_table))
+        rapport_table.index.name = None
+    
+        def render_colored_table_centered(df):
+            html = '<table style="border-collapse:collapse;width:100%;">'
+            html += '<tr style="background-color:#0031E3;color:#fff;text-align:center;">'
+            for col in df.columns:
+                html += f'<th style="padding:8px;border:1px solid #ddd;text-align:center;">{col}</th>'
             html += '</tr>'
-        html += '</table>'
-        return html
+            for _, row in df.iterrows():
+                html += '<tr>'
+                for cell in row:
+                    html += f'<td style="padding:8px;border:1px solid #ddd;text-align:center;">{cell if pd.notna(cell) else ""}</td>'
+                html += '</tr>'
+            html += '</table>'
+            return html
     
-    #st.markdown("### Rapport Médical")
-    st.markdown(render_colored_table_centered(rapport_table), unsafe_allow_html=True)
-
+        # Only render when there is data
+        st.markdown(render_colored_table_centered(rapport_table), unsafe_allow_html=True)
     
     all_players = df['Nom'].dropna().unique()
     total_players = len(all_players)
