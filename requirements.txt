@@ -12,3 +12,9 @@ reportlab
 beautifulsoup4
 numpy
 seaborn
+statsbombpy
+requests
+requests_cache
+openpyxl
+adjustText
+xlsxwriter
