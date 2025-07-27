@@ -27,6 +27,25 @@ import base64
 import plotly.graph_objects as go
 
 
+def check_login():
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
+        st.title("FC Versailles | Accès Sécurisé")
+        id_input = st.text_input("Identifiant :", type="password")
+        if st.button("Connexion"):
+            if id_input == "FCversailles78!":
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Identifiant incorrect. Essayez encore.")
+        st.stop()  # Stop rest of script if not logged in
+
+check_login()
+
+
+
 # ... other imports ...
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 TOKEN_FILE_MED = 'token_med.pickle'
