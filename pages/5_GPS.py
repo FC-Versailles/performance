@@ -401,7 +401,7 @@ elif page == "Entrainement":
     st.markdown("### 🎯 Entraînement")
     allowed_tasks = [
         "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
-        "OPTI +", "OPTI J-1", "REATHLE", "MICRO"
+        "OPTI +", "OPTI J-1", "MICRO"
     ]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     valid_dates = train_data["Date"].dropna()
@@ -821,29 +821,34 @@ elif page == "Entrainement":
     
     st.markdown("#### 📊 Analyse Semaine")
 
-    # Ensure 'Semaine' column exists (or create from Date if needed)
-    if "Semaine" not in data.columns:
-        data["Semaine"] = data["Date"].dt.strftime("%Y-%W")
+    # Use different allowed_tasks for weekly analysis
+    allowed_tasks_week = [
+        "WU + GAME + COMP", 
+        "WU + GAME","OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
+        "OPTI +", "OPTI J-1", "MICRO","COMPENSATION","AUTRES"
+    ]
     
-    train_data = data[data["Type"].isin(allowed_tasks)].copy()
     
-    available_weeks = sorted(train_data["Semaine"].dropna().unique())
+    
+    train_data_week = data[data["Type"].isin(allowed_tasks_week)].copy()
+
+    # Ensure 'Semaine' column exists
+    if "Semaine" not in train_data_week.columns:
+        train_data_week["Semaine"] = train_data_week["Date"].dt.strftime("%Y-%W")
+    
+    available_weeks = sorted(train_data_week["Semaine"].dropna().unique())
     selected_weeks = st.multiselect(
         "Sélectionnez une ou plusieurs semaines",
         options=available_weeks,
         default=available_weeks[-1:]  # last week as default
     )
     
-    week_df = train_data[train_data["Semaine"].isin(selected_weeks)].copy()
+    week_df = train_data_week[train_data_week["Semaine"].isin(selected_weeks)].copy()
     if week_df.empty:
         st.info(f"Aucune donnée d'entraînement pour les semaines sélectionnées.")
         st.stop()
+
     # ========== Clean and Aggregate ==========
-    objective_fields = [
-        "RPE", "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-    ]
-    
     df_week = week_df[["Name"] + [col for col in objective_fields if col in week_df.columns]].copy()
     
     for c in objective_fields:
@@ -859,8 +864,13 @@ elif page == "Entrainement":
         df_week[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
     
     # Sum the metrics per player (weekly total)
-    agg_dict = {c: "sum" if c != "Vmax" else "mean" for c in df_week.columns if c != "Name"}
+    # Sum metrics, but take max for Vmax
+    agg_dict = {c: "sum" for c in df_week.columns if c != "Name"}
+    if "Vmax" in df_week.columns:
+        agg_dict["Vmax"] = "max"
+    
     df_week_sum = df_week.groupby("Name", as_index=False).agg(agg_dict)
+
     
     # ========== Add Mean Per Position ==========
     df_week_sum["Pos"] = df_week_sum["Name"].str.upper().map(player_positions)
@@ -892,7 +902,6 @@ elif page == "Entrainement":
     display_cols = [c for c in display_cols if c in df_sorted.columns]
     df_display = df_sorted.loc[:, display_cols]
     
-    # --- Styles ---
     def alternate_colors(row):
         if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
         color = '#EDE8E8' if row.name % 2 == 0 else 'white'
@@ -922,7 +931,6 @@ elif page == "Entrainement":
     ], overwrite=False)
     styled = styled.set_table_attributes('class="centered-table"')
     
-    import re
     html_obj = styled.to_html()
     
     total_rows = df_sorted.shape[0] + 1
