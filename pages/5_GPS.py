@@ -970,11 +970,7 @@ elif page == "Entrainement":
         st.markdown(f"###### Graphique {i}")
         colx, coly = st.columns(2)
         with coly:
-            agg_options = {
-                "Jour": "day",
-                "Semaine": "week",
-                "Mois": "month"
-            }
+            agg_options = {"Jour": "day", "Semaine": "week", "Mois": "month"}
             x_axis_mode = st.selectbox(
                 f"Regrouper par :", list(agg_options.keys()), key=f"xaxis_{i}"
             )
@@ -983,8 +979,9 @@ elif page == "Entrainement":
             YVARS = [
                 "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
                 "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
-                "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax", "Acc", "Dec", "Amax", "Dmax",
-                "HSR", "HSR/min", "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
+                "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax", "Acc", "Dec",
+                "Amax", "Dmax", "HSR", "HSR/min", "SPR", "SPR/min", "HSPR",
+                "HSPR/min", "Dist Acc", "Dist Dec"
             ]
             sel_y = st.multiselect(
                 f"Variable(s) à afficher (max 2) – Graphique {i}",
@@ -993,7 +990,8 @@ elif page == "Entrainement":
                 max_selections=2,
                 key=f"yvar_{i}"
             )
-        # Filtrage
+    
+        # --- Filtrage ---
         filt = train_data.copy()
         if sel_sem:
             filt = filt[filt["Semaine"].isin(sel_sem)]
@@ -1001,6 +999,7 @@ elif page == "Entrainement":
             filt = filt[filt["Type"].isin(sel_task)]
         if "Date" in filt.columns:
             filt["Date"] = pd.to_datetime(filt["Date"], errors="coerce")
+    
         for col in sel_y:
             if col in filt.columns:
                 filt[col] = (
@@ -1012,29 +1011,43 @@ elif page == "Entrainement":
                     .replace("", np.nan)
                 )
                 filt[col] = pd.to_numeric(filt[col], errors="coerce")
-        # Regroupement
-        if "Date" in filt.columns and sel_y:
-            if agg_mode == "day":
+    
+        # --- Regroupement ---
+        grp = None
+        if sel_y:
+            # Define grouping column
+            if agg_mode == "day" and "Date" in filt.columns:
                 filt["XGroup"] = filt["Date"].dt.date
                 label_func = lambda d: d.strftime("%d.%m") if not pd.isnull(d) else ""
             elif agg_mode == "week":
-                filt["XGroup"] = filt["Date"].dt.strftime("%G-W%V")
-                label_func = lambda d: str(d)
-            elif agg_mode == "month":
+                filt["XGroup"] = filt["Semaine"] if "Semaine" in filt.columns else filt["Date"].dt.strftime("%G-W%V")
+                label_func = lambda d: f"S{int(d)}" if pd.notnull(d) and str(d).isdigit() else str(d)
+            elif agg_mode == "month" and "Date" in filt.columns:
                 filt["XGroup"] = filt["Date"].dt.strftime("%Y-%m")
                 label_func = lambda d: str(d)
             else:
-                filt["XGroup"] = filt["Date"].dt.date
+                filt["XGroup"] = filt["Date"].dt.date if "Date" in filt.columns else None
                 label_func = lambda d: str(d)
-            grp = filt.groupby("XGroup")[sel_y].mean().sort_index()
-        else:
-            grp = None
+    
+            if "XGroup" in filt.columns:
+                # Custom aggregation: mean for day, sum for week/month, max for Vmax
+                def custom_agg(x, var):
+                    if var == "Vmax":
+                        return x.max()
+                    return x.mean() if agg_mode == "day" else x.sum()
+    
+                grp = filt.groupby("XGroup")[sel_y].agg(
+                    {col: (lambda s, col=col: custom_agg(s, col)) for col in sel_y}
+                ).sort_index()
+    
+        # --- Plot ---
         if grp is not None and not grp.empty:
             grp_plot = grp.reset_index()
             grp_plot = grp_plot.rename(columns={grp_plot.columns[0]: "XGroup"})
             grp_plot["X_fmt"] = grp_plot["XGroup"].apply(label_func)
             y_arg = sel_y if len(sel_y) > 1 else sel_y[0]
             color_sequence = ["#0031E3", "#CFB013"] if len(sel_y) > 1 else ["#0031E3"]
+    
             fig = px.bar(
                 grp_plot,
                 x="XGroup",
@@ -1066,6 +1079,7 @@ elif page == "Entrainement":
             st.plotly_chart(fig, use_container_width=True, key=f"plot_{i}")
         else:
             st.info(f"Aucune donnée pour ce graphique selon ces filtres ou variable non sélectionnée.")
+
             
     st.markdown("#### 🏃 Training load")
     
