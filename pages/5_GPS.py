@@ -26,9 +26,7 @@ cmaps = matplotlib.cm.get_cmap('RdYlGn')
 cmapa = matplotlib.cm.get_cmap('Greens')  # ou RdYlGn pour du rouge/vert
 import matplotlib.colors as mcolors
 
-
 # ── Constants ─────────────────────────────────────────────────────────────────
-
 
 st.set_page_config(layout='wide')
 col1, col2 = st.columns([9,1])
@@ -43,15 +41,15 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ── Fetch & cache data ────────────────────────────────────────────────────────
 SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE     = 'token._gps.pickle'
-SPREADSHEET_ID = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
+TOKEN_FILE_GPS     = 'token._gps.pickle'
+SPREADSHEET_ID_GPS = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
-RANGE_NAME = 'Feuille 1!A1:AB'
+RANGE_NAME = 'Feuille 1!A1:AC'
 
 def get_credentials():
     creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'rb') as f:
+    if os.path.exists(TOKEN_FILE_GPS):
+        with open(TOKEN_FILE_GPS, 'rb') as f:
             creds = pickle.load(f)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -61,7 +59,7 @@ def get_credentials():
                 'client_secret.json', SCOPES
             )
             creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'wb') as f:
+        with open(TOKEN_FILE_GPS, 'wb') as f:
             pickle.dump(creds, f)
     return creds
 
@@ -111,7 +109,7 @@ def load_data():
 
     # keep only your 24 columns
     expected = [
-        "Season","Semaine","HUMEUR","PLAISIR","RPE","Date","AMPM","Jour","Type","Teffectif","Name",
+        "Season","Semaine","HUMEUR","PLAISIR","RPE","ERPE","Date","AMPM","Jour","Type","Ttotal","Teffectif","Name",
         "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "Distance 90% Vmax","N° Sprints","Vmax","%Vmax","Acc","Dec","Amax","Dmax"
@@ -465,7 +463,7 @@ elif page == "Entrainement":
         st.warning("Aucune colonne ERPE trouvée dans la séance sélectionnée.")
         session_ERPE = float("nan")
     
-    max_duration = pd.to_numeric(filtered_df["Duration"], errors="coerce").max(skipna=True) if "Duration" in filtered_df.columns else float("nan")
+    max_duration = pd.to_numeric(filtered_df["Ttotal"], errors="coerce").max(skipna=True) if "Ttotal" in filtered_df.columns else float("nan")
     max_teffectif = pd.to_numeric(filtered_df["Teffectif"], errors="coerce").max(skipna=True) if "Teffectif" in filtered_df.columns else float("nan")
     
     try:
@@ -682,7 +680,6 @@ elif page == "Entrainement":
     components.html(wrapper, height=iframe_height, scrolling=False)
 
 
-
     # ── Export PDF with same colored table fit to A4 landscape ───────────────
     if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
         obj = objectives.get("Duration", None) 
@@ -821,6 +818,133 @@ elif page == "Entrainement":
         )
                                                                      
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
+    
+    st.markdown("#### 📊 Analyse Semaine")
+
+    # Ensure 'Semaine' column exists (or create from Date if needed)
+    if "Semaine" not in data.columns:
+        data["Semaine"] = data["Date"].dt.strftime("%Y-%W")
+    
+    train_data = data[data["Type"].isin(allowed_tasks)].copy()
+    
+    available_weeks = sorted(train_data["Semaine"].dropna().unique())
+    selected_weeks = st.multiselect(
+        "Sélectionnez une ou plusieurs semaines",
+        options=available_weeks,
+        default=available_weeks[-1:]  # last week as default
+    )
+    
+    week_df = train_data[train_data["Semaine"].isin(selected_weeks)].copy()
+    if week_df.empty:
+        st.info(f"Aucune donnée d'entraînement pour les semaines sélectionnées.")
+        st.stop()
+    # ========== Clean and Aggregate ==========
+    objective_fields = [
+        "RPE", "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+    ]
+    
+    df_week = week_df[["Name"] + [col for col in objective_fields if col in week_df.columns]].copy()
+    
+    for c in objective_fields:
+        if c not in df_week.columns:
+            continue
+        cleaned = (
+            df_week[c].astype(str)
+                      .str.replace(r"[^\d\-,\.]", "", regex=True)
+                      .str.replace(",", ".", regex=False)
+                      .replace("", pd.NA)
+        )
+        num = pd.to_numeric(cleaned, errors="coerce")
+        df_week[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
+    
+    # Sum the metrics per player (weekly total)
+    agg_dict = {c: "sum" if c != "Vmax" else "mean" for c in df_week.columns if c != "Name"}
+    df_week_sum = df_week.groupby("Name", as_index=False).agg(agg_dict)
+    
+    # ========== Add Mean Per Position ==========
+    df_week_sum["Pos"] = df_week_sum["Name"].str.upper().map(player_positions)
+    players_only = df_week_sum.copy()
+    players_only["Pos"] = players_only["Pos"].fillna("NC")
+    
+    pos_order = ["DC", "M", "PIS", "ATT", "NC"]
+    grouped = []
+    
+    for pos in pos_order:
+        grp = players_only[players_only["Pos"] == pos].sort_values("Name")
+        if grp.empty:
+            continue
+        grouped.append(grp)
+        mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
+        for c in objective_fields:
+            if c not in grp.columns:
+                continue
+            vals = grp[c]
+            moy = vals.mean(skipna=True)
+            mean_vals[c] = round(moy, 1) if c == "Vmax" else int(round(moy, 0))
+        grouped.append(pd.DataFrame([mean_vals]))
+    
+    df_sorted = pd.concat(grouped, ignore_index=True)
+    df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
+    
+    # ========== Display ==========
+    display_cols = ["RPE", "Name", "Pos"] + [c for c in objective_fields if c not in ["RPE"]]
+    display_cols = [c for c in display_cols if c in df_sorted.columns]
+    df_display = df_sorted.loc[:, display_cols]
+    
+    # --- Styles ---
+    def alternate_colors(row):
+        if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
+        color = '#EDE8E8' if row.name % 2 == 0 else 'white'
+        return [f'background-color:{color}'] * len(display_cols)
+    
+    def highlight_moyenne(row):
+        if row['Name'].startswith('Moyenne'):
+            return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
+        return [''] * len(display_cols)
+    
+    styled = df_display.style
+    styled = styled.apply(alternate_colors, axis=1)
+    styled = styled.apply(highlight_moyenne, axis=1)
+    
+    style_formats = {}
+    for c in display_cols:
+        if c == "Vmax":
+            style_formats[c] = "{:.1f}"
+        elif c not in ["Name", "Pos", "RPE"]:
+            style_formats[c] = "{:.0f}"
+    styled = styled.format(style_formats)
+    
+    styled = styled.set_table_styles([
+        {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
+        {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
+        {'selector': 'th.blank', 'props': 'display:none;'}
+    ], overwrite=False)
+    styled = styled.set_table_attributes('class="centered-table"')
+    
+    import re
+    html_obj = styled.to_html()
+    
+    total_rows = df_sorted.shape[0] + 1
+    header_height = 30
+    row_height = 28
+    iframe_height = header_height + total_rows * row_height
+    
+    wrapper = f"""
+    <html>
+      <head>
+        <style>
+          .centered-table{{border-collapse:collapse;width:100%;}}
+          .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
+          .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
+          .centered-table th, .centered-table td {{border:1px solid #ddd;}}
+          .centered-table th{{background-color:#0031E3;color:white;}}
+        </style>
+      </head>
+      <body>{html_obj}</body>
+    </html>
+    """
+    components.html(wrapper, height=iframe_height, scrolling=False)
 
     st.markdown("#### 📊 Analyse collective")
     
