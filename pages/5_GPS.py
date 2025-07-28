@@ -93,7 +93,7 @@ def load_data():
     result = (
         service.spreadsheets()
                .values()
-               .get(spreadsheetId=SPREADSHEET_ID,
+               .get(spreadsheetId=SPREADSHEET_ID_GPS,
                     range=RANGE_NAME,
                     valueRenderOption='FORMATTED_VALUE')
                .execute()
