@@ -25,6 +25,7 @@ cmap = matplotlib.cm.get_cmap('RdYlGn_r')
 cmaps = matplotlib.cm.get_cmap('RdYlGn')
 cmapa = matplotlib.cm.get_cmap('Greens')  # ou RdYlGn pour du rouge/vert
 import matplotlib.colors as mcolors
+import plotly.graph_objects as go
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1588,17 +1589,301 @@ elif page == "Match":
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
 elif page == "Joueurs":
     st.subheader("🔎 Analyse d'un joueur")
+
+    # --- Sélection du joueur ---
     players = sorted(data["Name"].dropna().unique())
     sel = st.selectbox("Choisissez un joueur", players)
-    p_df = data[data["Name"] == sel]
-    g_df = p_df[p_df["Type"] == "GAME"]
-    if not g_df.empty:
-        wmin = g_df["Semaine"].min()
-        wmax = g_df["Semaine"].max()
-        weeks = pd.DataFrame({"Semaine": range(wmin, wmax + 1)})
-        mins  = g_df.groupby("Semaine")["Duration"].sum().reset_index()
-        merged = weeks.merge(mins, on="Semaine", how="left").fillna(0)
-        fig = px.bar(merged, x="Semaine", y="Duration", title=f"{sel} – Minutes par semaine")
-        st.plotly_chart(fig, use_container_width=True)
+
+    p_df = data[data["Name"] == sel].copy()
+    p_df["Date"] = pd.to_datetime(p_df["Date"], errors="coerce")
+
+    # --- Colonnes numériques à nettoyer ---
+    cols_to_clean = [
+        "Acc","Dec", "Distance 90% Vmax", "N° Sprints", "Vmax",
+        "Distance 20-25km/h", "Distance 25km/h", "Distance", "Distance 15km/h"
+    ]
+    for c in cols_to_clean:
+        if c in p_df.columns:
+            p_df[c] = (
+                p_df[c].astype(str)
+                      .str.replace(r"[^\d,.-]", "", regex=True)
+                      .str.replace(",", ".", regex=False)
+            )
+            p_df[c] = pd.to_numeric(p_df[c], errors="coerce")
+
+    # --- Agrégation par jour pour éviter les doublons ---
+    agg_dict = {c: "sum" for c in cols_to_clean if c != "Vmax" and c in p_df.columns}
+    if "Vmax" in p_df.columns:
+        agg_dict["Vmax"] = "max"
+
+    p_df = p_df.groupby("Date", as_index=False).agg(agg_dict)
+
+    # --- Créer un calendrier complet pour la période ---
+    if not p_df["Date"].dropna().empty:
+        date_min, date_max = p_df["Date"].min(), p_df["Date"].max()
+        full_dates = pd.date_range(start=date_min, end=date_max, freq='D')
+
+        p_df = p_df.set_index("Date").reindex(full_dates).reset_index()
+        p_df = p_df.rename(columns={"index": "Date"})
+        for c in cols_to_clean:
+            if c in p_df.columns:
+                p_df[c] = p_df[c].fillna(0)
+
+    # --- Graphique 1 : Acc par jour ---
+    if "Acc" in p_df.columns:
+        fig1 = px.bar(
+            p_df,
+            x="Date",
+            y="Acc",
+            title=f"{sel} – Accélérations par jour",
+            color_discrete_sequence=["#0031E3"],
+            text_auto='.0f'
+        )
+        fig1.update_traces(textposition='outside', cliponaxis=False)
+        fig1.update_layout(
+            height=400,
+            margin=dict(t=40, b=30, l=40, r=30),
+            xaxis=dict(dtick="D1", tickformat="%d-%m")
+        )
+        st.plotly_chart(fig1, use_container_width=True)
     else:
-        st.info("Pas de données de match pour ce joueur.")
+        st.info("Pas de données Acc pour ce joueur.")
+        
+    if "Dec" in p_df.columns:
+        fig3 = px.bar(
+            p_df,
+            x="Date",
+            y="Dec",
+            title=f"{sel} – Decélérations par jour",
+            color_discrete_sequence=["#0031E3"],
+            text_auto='.0f'
+        )
+        fig3.update_traces(textposition='outside', cliponaxis=False)
+        fig3.update_layout(
+            height=400,
+            margin=dict(t=40, b=30, l=40, r=30),
+            xaxis=dict(dtick="D1", tickformat="%d-%m")
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Pas de données Acc pour ce joueur.")
+
+    # --- Graphique 2 : Distance 90% Vmax + N° Sprints (bar), Vmax (scatter) ---
+    if {"Distance 90% Vmax", "N° Sprints", "Vmax"}.issubset(p_df.columns):
+        fig2 = go.Figure()
+
+        fig2.add_trace(go.Bar(
+            x=p_df["Date"],
+            y=p_df["Distance 90% Vmax"],
+            name="Distance 90% Vmax",
+            marker_color="#0031E3"
+        ))
+
+        fig2.add_trace(go.Bar(
+            x=p_df["Date"],
+            y=p_df["N° Sprints"],
+            name="N° Sprints",
+            marker_color="#CFB013"
+        ))
+
+        fig2.add_trace(go.Scatter(
+            x=p_df["Date"],
+            y=p_df["Vmax"],
+            name="Vmax (km/h)",
+            mode="markers+lines",
+            marker=dict(color="red", size=8),
+            yaxis="y2"
+        ))
+
+        fig2.update_layout(
+            title=f"{sel} – Distance 90% Vmax, N° Sprints & Vmax",
+            barmode="group",
+            yaxis=dict(title="Distance / Sprints"),
+            yaxis2=dict(title="Vmax (km/h)", overlaying="y", side="right"),
+            height=400,
+            xaxis=dict(dtick="D1", tickformat="%d-%m"),
+            margin=dict(t=40, b=30, l=40, r=30)
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("Pas de données Distance 90% Vmax, N° Sprints ou Vmax pour ce joueur.")
+
+    # --- Graphique 3 : Distance 20-25km/h et Distance 25km/h ---
+    if {"Distance 20-25km/h", "Distance 25km/h"}.issubset(p_df.columns):
+        fig3 = px.bar(
+            p_df,
+            x="Date",
+            y=["Distance 20-25km/h", "Distance 25km/h"],
+            title=f"{sel} – Distance par zones de vitesse",
+            barmode="group",
+            color_discrete_sequence=["#0031E3", "#CFB013"],
+            text_auto='.0f'
+        )
+        fig3.update_traces(textposition='outside', cliponaxis=False)
+        fig3.update_layout(
+            height=400,
+            margin=dict(t=40, b=30, l=40, r=30),
+            xaxis=dict(dtick="D1", tickformat="%d-%m")
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Pas de données Distance 20-25km/h ou Distance 25km/h pour ce joueur.")
+        
+        # --- Graphique 4 : Distance et Distance 15km/h ---
+    if {"Distance", "Distance 15km/h"}.issubset(p_df.columns):
+        fig4 = px.bar(
+            p_df,
+            x="Date",
+            y=["Distance", "Distance 15km/h"],
+            title=f"{sel} – Distance totale et Distance >15km/h",
+            barmode="group",
+            color_discrete_sequence=["#0031E3", "#CFB013"],
+            text_auto='.0f'
+        )
+        fig4.update_traces(textposition='outside', cliponaxis=False)
+        fig4.update_layout(
+            height=400,
+            margin=dict(t=40, b=30, l=40, r=30),
+            xaxis=dict(dtick="D1", tickformat="%d-%m")
+        )
+        st.plotly_chart(fig4, use_container_width=True)
+    else:
+        st.info("Pas de données Distance ou Distance 15km/h pour ce joueur.") 
+        
+##########################################################################################################
+        
+    # Ajouter Semaine avant agrégation par Date
+    if "Semaine" in data.columns:
+        p_df = data[data["Name"] == sel].copy()
+        p_df["Date"] = pd.to_datetime(p_df["Date"], errors="coerce")
+        p_df["Semaine"] = data.loc[data["Name"] == sel, "Semaine"].values
+    else:
+        st.warning("La colonne 'Semaine' n'existe pas dans le DataFrame.")
+        st.stop()
+    
+    # --- Colonnes numériques à nettoyer ---
+    cols_to_clean = [
+        "Acc", "Dec", "Distance 90% Vmax", "N° Sprints", "Vmax",
+        "Distance 20-25km/h", "Distance 25km/h", "Distance", "Distance 15km/h"
+    ]
+    for c in cols_to_clean:
+        if c in p_df.columns:
+            p_df[c] = (
+                p_df[c].astype(str)
+                      .str.replace(r"[^\d,.-]", "", regex=True)
+                      .str.replace(",", ".", regex=False)
+            )
+            p_df[c] = pd.to_numeric(p_df[c], errors="coerce")
+    
+    # --- Agrégation par jour ---
+    agg_dict = {c: "sum" for c in cols_to_clean if c != "Vmax" and c in p_df.columns}
+    if "Vmax" in p_df.columns:
+        agg_dict["Vmax"] = "max"
+    
+    p_day = p_df.groupby(["Date", "Semaine"], as_index=False).agg(agg_dict)
+    
+    # --- Agrégation par semaine ---
+    p_week = p_df.groupby("Semaine", as_index=False).agg(agg_dict)
+         
+
+    # --- Graphique 1 : Acc par semaine ---
+    if "Acc" in p_df.columns:
+        fig1 = px.bar(
+            p_df,
+            x="Semaine",
+            y="Acc",
+            title=f"{sel} – Accélérations par semaine",
+            color_discrete_sequence=["#0031E3"],
+            text_auto='.0f'
+        )
+        fig1.update_traces(textposition='outside', cliponaxis=False)
+        fig1.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
+        st.plotly_chart(fig1, use_container_width=True)
+    else:
+        st.info("Pas de données Acc pour ce joueur.")
+
+    # --- Graphique Dec ---
+    if "Dec" in p_df.columns:
+        fig3 = px.bar(
+            p_df,
+            x="Semaine",
+            y="Dec",
+            title=f"{sel} – Décélérations par semaine",
+            color_discrete_sequence=["#0031E3"],
+            text_auto='.0f'
+        )
+        fig3.update_traces(textposition='outside', cliponaxis=False)
+        fig3.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Pas de données Décélérations pour ce joueur.")
+
+    # --- Graphique 2 : Distance 90% Vmax + N° Sprints (bar), Vmax (scatter) ---
+    if {"Distance 90% Vmax", "N° Sprints"}.issubset(p_df.columns):
+        fig2 = go.Figure()
+
+        fig2.add_trace(go.Bar(
+            x=p_df["Semaine"],
+            y=p_df["Distance 90% Vmax"],
+            name="Distance 90% Vmax",
+            marker_color="#0031E3"
+        ))
+
+        fig2.add_trace(go.Bar(
+            x=p_df["Semaine"],
+            y=p_df["N° Sprints"],
+            name="N° Sprints",
+            marker_color="#CFB013"
+        ))
+
+
+        fig2.update_layout(
+            title=f"{sel} – Distance 90% Vmax, N° Sprints & Vmax (par semaine)",
+            barmode="group",
+            yaxis=dict(title="Distance / Sprints"),
+            yaxis2=dict(title="Vmax (km/h)", overlaying="y", side="right"),
+            height=400,
+            margin=dict(t=40, b=30, l=40, r=30)
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("Pas de données Distance 90% Vmax, N° Sprints ou Vmax pour ce joueur.")
+
+    # --- Graphique 3 : Distance 20-25km/h et Distance 25km/h ---
+    if {"Distance 20-25km/h", "Distance 25km/h"}.issubset(p_df.columns):
+        fig3 = px.bar(
+            p_df,
+            x="Semaine",
+            y=["Distance 20-25km/h", "Distance 25km/h"],
+            title=f"{sel} – Distance par zones de vitesse (par semaine)",
+            barmode="group",
+            color_discrete_sequence=["#0031E3", "#CFB013"],
+            text_auto='.0f'
+        )
+        fig3.update_traces(textposition='outside', cliponaxis=False)
+        fig3.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Pas de données Distance 20-25km/h ou Distance 25km/h pour ce joueur.")
+
+    # --- Graphique 4 : Distance et Distance 15km/h ---
+    if {"Distance", "Distance 15km/h"}.issubset(p_df.columns):
+        fig4 = px.bar(
+            p_df,
+            x="Semaine",
+            y=["Distance", "Distance 15km/h"],
+            title=f"{sel} – Distance totale et Distance >15km/h (par semaine)",
+            barmode="group",
+            color_discrete_sequence=["#0031E3", "#CFB013"],
+            text_auto='.0f'
+        )
+        fig4.update_traces(textposition='outside', cliponaxis=False)
+        fig4.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
+        st.plotly_chart(fig4, use_container_width=True)
+    else:
+        st.info("Pas de données Distance ou Distance 15km/h pour ce joueur.")     
+    
+    
+    
+    
+    
