@@ -110,9 +110,8 @@ def load_medical_data():
 
 df = load_medical_data()
 
-
-df = df[~df['Nom'].isin(['Agoro', 'Bangoura', 'Mbala','Karamoko'])]
-
+df = df[~df['Nom'].isin(['Agoro', 'Bangoura', 'Mbala','Karamoko','Raux','Diakhaby','Guirrassy ','Kouassi','Mendes','Sallard'
+                         'Mahop','Kodjia','Baghdadi','Mbemba','Guirassy ','Hend','Altikulac','Raux-Yao',' Sallard','El hriti','Duku','Gaval','Benhaddou'])]
 
 # Sort dataframe by earliest date first without parsing dates
 if 'Date' in df.columns:
@@ -122,7 +121,7 @@ if 'Date' in df.columns:
 st.sidebar.title("FC Versailles Medical")
 page = st.sidebar.selectbox(
     "Select Page",
-    ["Rapport Quotidien", "Historique du Joueur", "Rappport de blessure", "Bilan Médical", "Planification"])
+    ["Rapport Quotidien", "Historique du Joueur", "Rappport de blessure", "Bilan Médical"])
 
 if page == "Historique du Joueur":
     st.title("Fiche Joueur")
@@ -285,7 +284,7 @@ elif page == "Rapport Quotidien":
     absent_today = dai_data[dai_data['Motif consultation'].str.lower() == 'absent']['Nom'].dropna().unique()
     
     # Combine both unavailabilities
-    unavailable_players = set(maladie_today).union(set(rtp_today)).union(set(absent_today))
+    unavailable_players = set(maladie_today).union(set(rtp_today))
 
     
     # Compute number of available players
@@ -336,7 +335,7 @@ elif page == "Rapport Quotidien":
     }
 
     # Affichage par motif
-    for motif in ['Absent', 'Adaptation', 'Réathlétisation', 'Soins', 'Prevention', 'Renforcement', 'Maladie']:
+    for motif in ['Absent', 'Adaptation', 'Réathlétisation','Maladie','Soins']:
         st.write(f"**{motif}**")
         motif_data = dai_data[dai_data['Motif consultation'].str.lower() == motif.lower()]
         if not motif_data.empty:
@@ -390,36 +389,18 @@ elif page == "Bilan Médical":
 elif page == "Planification":
     st.title("📄 Planification de Réathlétisation")
 
-    # Google Drive File ID
-    file_id = "1j3WyPhQGLczI-ud4_VGz5GrkPqy6Ky8F"
-    preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
-    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    # # Google Drive File ID
+    # file_id = "1j3WyPhQGLczI-ud4_VGz5GrkPqy6Ky8F"
+    # preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
+    # download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-    # Affichage PDF
-    st.markdown(
-        f"""
-        <iframe src="{preview_url}" width="100%" height="800px"></iframe>
-        """,
-        unsafe_allow_html=True
-    )
+    # # Affichage PDF
+    # st.markdown(
+    #     f"""
+    #     <iframe src="{preview_url}" width="100%" height="800px"></iframe>
+    #     """,
+    #     unsafe_allow_html=True
+    # )
 
-    # Lien de téléchargement
-    st.markdown(f"[📥 Télécharger le PDF]({download_url})", unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    # # Lien de téléchargement
+    # st.markdown(f"[📥 Télécharger le PDF]({download_url})", unsafe_allow_html=True)
