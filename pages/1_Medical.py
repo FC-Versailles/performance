@@ -366,12 +366,12 @@ elif page == "Bilan Médical":
 
     # Colonnes spécifiques par motif
     motif_columns = {
-        'Osteopathie': ['Date', 'Nom', 'Localisation du soin', 'Niveau inquietude', 'Remarque'],
+        'Osteopathe': ['Date', 'Nom', 'Localisation du soin', 'Niveau inquietude', 'Remarque'],
         'Podologue': ['Date', 'Nom', 'inquietude', 'Remarque'],
         'Visite Medicale': ['Date', 'Nom', 'Localisation_', 'statut', 'Remarque']
     }
 
-    for motif in ['Visite Medicale', 'Osteopathie', 'Podologue']:
+    for motif in ['Visite Medicale', 'Osteopathe', 'Podologue']:
         st.write(f"**{motif}**")
         motif_data = weekly_data[weekly_data['Motif consultation'].str.lower() == motif.lower()]
         if not motif_data.empty:
