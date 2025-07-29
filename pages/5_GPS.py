@@ -425,8 +425,11 @@ elif page == "Entrainement":
             str(x) for x in date_df["AMPM"].dropna().unique()
             if str(x).strip() != "" and str(x).lower() != "nan"
         ])
-        options = ampm_unique.copy()
-        options.insert(0, "Total")
+        
+        # Reorder to have AM, PM, then Total
+        options = [x for x in ["AM", "PM"] if x in ampm_unique]
+        options.append("Total")
+    
         sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", options, key="ampm")
     
         if sel_ampm == "Total":
@@ -438,9 +441,11 @@ elif page == "Entrainement":
             for c in num_cols + ["RPE", "Vmax"]:
                 if c in date_df.columns:
                     date_df[c] = pd.to_numeric(
-                        date_df[c].astype(str).str.replace(r"[^\d\-,\.]", "", regex=True)
-                                       .str.replace(",", ".", regex=False)
-                                       .replace("", pd.NA), errors="coerce"
+                        date_df[c].astype(str)
+                                   .str.replace(r"[^\d\-,\.]", "", regex=True)
+                                   .str.replace(",", ".", regex=False)
+                                   .replace("", pd.NA),
+                        errors="coerce"
                     )
             agg_dict = {c: "sum" for c in num_cols}
             for c in ["RPE", "Vmax"]:
