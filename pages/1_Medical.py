@@ -368,10 +368,10 @@ elif page == "Bilan Médical":
     motif_columns = {
         'Osteopathe': ['Date', 'Nom', 'Localisation du soin', 'Niveau inquietude', 'Remarque'],
         'Podologue': ['Date', 'Nom', 'inquietude', 'Remarque'],
-        'Visite Medicale': ['Date', 'Nom', 'Localisation_', 'statut', 'Remarque']
+        'Docteur': ['Date', 'Nom', 'Localisation_', 'statut', 'Remarque']
     }
 
-    for motif in ['Visite Medicale', 'Osteopathe', 'Podologue']:
+    for motif in ['Docteur', 'Osteopathe', 'Podologue']:
         st.write(f"**{motif}**")
         motif_data = weekly_data[weekly_data['Motif consultation'].str.lower() == motif.lower()]
         if not motif_data.empty:
