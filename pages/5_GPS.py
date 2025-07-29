@@ -1635,7 +1635,7 @@ elif page == "Joueurs":
             p_df,
             x="Date",
             y="Acc",
-            title=f"{sel} – Accélérations par jour",
+            title=f"{sel} – Accélérations",
             color_discrete_sequence=["#0031E3"],
             text_auto='.0f'
         )
@@ -1654,7 +1654,7 @@ elif page == "Joueurs":
             p_df,
             x="Date",
             y="Dec",
-            title=f"{sel} – Decélérations par jour",
+            title=f"{sel} – Decélérations",
             color_discrete_sequence=["#0031E3"],
             text_auto='.0f'
         )
@@ -1671,21 +1671,23 @@ elif page == "Joueurs":
     # --- Graphique 2 : Distance 90% Vmax + N° Sprints (bar), Vmax (scatter) ---
     if {"Distance 90% Vmax", "N° Sprints", "Vmax"}.issubset(p_df.columns):
         fig2 = go.Figure()
-
+    
+        # --- Bars ---
         fig2.add_trace(go.Bar(
             x=p_df["Date"],
             y=p_df["Distance 90% Vmax"],
             name="Distance 90% Vmax",
             marker_color="#0031E3"
         ))
-
+    
         fig2.add_trace(go.Bar(
             x=p_df["Date"],
             y=p_df["N° Sprints"],
             name="N° Sprints",
             marker_color="#CFB013"
         ))
-
+    
+        # --- Red dots for Vmax ---
         fig2.add_trace(go.Scatter(
             x=p_df["Date"],
             y=p_df["Vmax"],
@@ -1694,7 +1696,21 @@ elif page == "Joueurs":
             marker=dict(color="red", size=8),
             yaxis="y2"
         ))
-
+    
+            
+        # --- Add annotations above red dots for Vmax > 10 ---
+        vmax_points = p_df[p_df["Vmax"] > 10]
+        for _, row in vmax_points.iterrows():
+            fig2.add_annotation(
+                x=row["Date"],
+                y=row["Vmax"] + 100,        # Place the text 2 units ABOVE the dot
+                text=f"{row['Vmax']:.1f}",  # Show 1 decimal
+                showarrow=False,
+                xanchor="center",
+                font=dict(size=10, color="black", family="Arial")
+            )
+    
+        # --- Layout ---
         fig2.update_layout(
             title=f"{sel} – Distance 90% Vmax, N° Sprints & Vmax",
             barmode="group",
@@ -1704,6 +1720,7 @@ elif page == "Joueurs":
             xaxis=dict(dtick="D1", tickformat="%d-%m"),
             margin=dict(t=40, b=30, l=40, r=30)
         )
+    
         st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("Pas de données Distance 90% Vmax, N° Sprints ou Vmax pour ce joueur.")
@@ -1785,105 +1802,130 @@ elif page == "Joueurs":
     # --- Agrégation par semaine ---
     p_week = p_df.groupby("Semaine", as_index=False).agg(agg_dict)
          
-
-    # --- Graphique 1 : Acc par semaine ---
-    if "Acc" in p_df.columns:
+    if "Acc" in p_week.columns:
         fig1 = px.bar(
-            p_df,
+            p_week,
             x="Semaine",
             y="Acc",
-            title=f"{sel} – Accélérations par semaine",
-            color_discrete_sequence=["#0031E3"],
-            text_auto='.0f'
+            title=f"{sel} – Accélérations",
+            color_discrete_sequence=["#0031E3"]
         )
-        fig1.update_traces(textposition='outside', cliponaxis=False)
+    
+        # Add annotation above each bar showing the total accelerations
+        for i, row in p_week.iterrows():
+            fig1.add_annotation(
+                x=row["Semaine"],
+                y=row["Acc"] + (row["Acc"] * 0.05),  # 5% above bar
+                text=f"{int(row['Acc'])}",
+                showarrow=False,
+                font=dict(size=11, color="black"),
+                xanchor="center",
+                yanchor="bottom"  # Ensure it's above
+            )
+    
+        fig1.update_traces(cliponaxis=False)
         fig1.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
         st.plotly_chart(fig1, use_container_width=True)
     else:
         st.info("Pas de données Acc pour ce joueur.")
 
-    # --- Graphique Dec ---
-    if "Dec" in p_df.columns:
-        fig3 = px.bar(
-            p_df,
-            x="Semaine",
-            y="Dec",
-            title=f"{sel} – Décélérations par semaine",
-            color_discrete_sequence=["#0031E3"],
-            text_auto='.0f'
-        )
-        fig3.update_traces(textposition='outside', cliponaxis=False)
-        fig3.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
-        st.plotly_chart(fig3, use_container_width=True)
-    else:
-        st.info("Pas de données Décélérations pour ce joueur.")
-
-    # --- Graphique 2 : Distance 90% Vmax + N° Sprints (bar), Vmax (scatter) ---
-    if {"Distance 90% Vmax", "N° Sprints"}.issubset(p_df.columns):
+    # --- Graphique 2 : Distance 90% Vmax + N° Sprints ---
+    if {"Distance 90% Vmax", "N° Sprints"}.issubset(p_week.columns):
         fig2 = go.Figure()
-
+    
+        # Add bars
         fig2.add_trace(go.Bar(
-            x=p_df["Semaine"],
-            y=p_df["Distance 90% Vmax"],
+            x=p_week["Semaine"],
+            y=p_week["Distance 90% Vmax"],
             name="Distance 90% Vmax",
             marker_color="#0031E3"
         ))
-
+    
         fig2.add_trace(go.Bar(
-            x=p_df["Semaine"],
-            y=p_df["N° Sprints"],
+            x=p_week["Semaine"],
+            y=p_week["N° Sprints"],
             name="N° Sprints",
             marker_color="#CFB013"
         ))
-
-
+    
+        # Add centered annotation
+        for i, row in p_week.iterrows():
+            max_val = max(row["Distance 90% Vmax"], row["N° Sprints"])
+            fig2.add_annotation(
+                x=row["Semaine"],
+                y=max_val + max_val * 0.05,
+                text=f"{int(row['Distance 90% Vmax'])} / {int(row['N° Sprints'])}",
+                showarrow=False,
+                font=dict(size=11, color="black"),
+                xanchor="center",
+                yanchor="bottom"
+            )
+    
         fig2.update_layout(
-            title=f"{sel} – Distance 90% Vmax, N° Sprints & Vmax (par semaine)",
+            title=f"{sel} – Distance 90% Vmax & N° Sprints",
             barmode="group",
             yaxis=dict(title="Distance / Sprints"),
-            yaxis2=dict(title="Vmax (km/h)", overlaying="y", side="right"),
             height=400,
             margin=dict(t=40, b=30, l=40, r=30)
         )
         st.plotly_chart(fig2, use_container_width=True)
     else:
-        st.info("Pas de données Distance 90% Vmax, N° Sprints ou Vmax pour ce joueur.")
-
+        st.info("Pas de données Distance 90% Vmax ou N° Sprints pour ce joueur.")
+    
     # --- Graphique 3 : Distance 20-25km/h et Distance 25km/h ---
-    if {"Distance 20-25km/h", "Distance 25km/h"}.issubset(p_df.columns):
+    if {"Distance 20-25km/h", "Distance 25km/h"}.issubset(p_week.columns):
         fig3 = px.bar(
-            p_df,
+            p_week,
             x="Semaine",
             y=["Distance 20-25km/h", "Distance 25km/h"],
-            title=f"{sel} – Distance par zones de vitesse (par semaine)",
+            title=f"{sel} – Distance par zones de vitesse",
             barmode="group",
-            color_discrete_sequence=["#0031E3", "#CFB013"],
-            text_auto='.0f'
+            color_discrete_sequence=["#0031E3", "#CFB013"]
         )
-        fig3.update_traces(textposition='outside', cliponaxis=False)
+    
+        # Add centered annotations
+        for i, row in p_week.iterrows():
+            max_val = max(row["Distance 20-25km/h"], row["Distance 25km/h"])
+            fig3.add_annotation(
+                x=row["Semaine"],
+                y=max_val + max_val * 0.05,
+                text=f"{int(row['Distance 20-25km/h'])} / {int(row['Distance 25km/h'])}",
+                showarrow=False,
+                font=dict(size=11, color="black"),
+                xanchor="center",
+                yanchor="bottom"
+            )
+    
         fig3.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
         st.plotly_chart(fig3, use_container_width=True)
     else:
         st.info("Pas de données Distance 20-25km/h ou Distance 25km/h pour ce joueur.")
-
+    
     # --- Graphique 4 : Distance et Distance 15km/h ---
-    if {"Distance", "Distance 15km/h"}.issubset(p_df.columns):
+    if {"Distance", "Distance 15km/h"}.issubset(p_week.columns):
         fig4 = px.bar(
-            p_df,
+            p_week,
             x="Semaine",
             y=["Distance", "Distance 15km/h"],
-            title=f"{sel} – Distance totale et Distance >15km/h (par semaine)",
+            title=f"{sel} – Distance totale et Distance >15km/h",
             barmode="group",
-            color_discrete_sequence=["#0031E3", "#CFB013"],
-            text_auto='.0f'
+            color_discrete_sequence=["#0031E3", "#CFB013"]
         )
-        fig4.update_traces(textposition='outside', cliponaxis=False)
+    
+        # Add centered annotations
+        for i, row in p_week.iterrows():
+            max_val = max(row["Distance"], row["Distance 15km/h"])
+            fig4.add_annotation(
+                x=row["Semaine"],
+                y=max_val + max_val * 0.05,
+                text=f"{int(row['Distance'])} / {int(row['Distance 15km/h'])}",
+                showarrow=False,
+                font=dict(size=11, color="black"),
+                xanchor="center",
+                yanchor="bottom"
+            )
+    
         fig4.update_layout(height=400, margin=dict(t=40, b=30, l=40, r=30))
         st.plotly_chart(fig4, use_container_width=True)
     else:
-        st.info("Pas de données Distance ou Distance 15km/h pour ce joueur.")     
-    
-    
-    
-    
-    
+        st.info("Pas de données Distance ou Distance 15km/h pour ce joueur.")
