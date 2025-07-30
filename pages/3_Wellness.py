@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 import plotly.express as px
+import plotly.graph_objects as go
 
 
 # Constants for Google Sheets
@@ -133,7 +134,7 @@ if page == "Pre-entrainement":
     # Define the full list of players
     all_players = [
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-        "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+        "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
         "Santini","Zemoura","Tchato","Ouchen","Traoré"
      
@@ -274,7 +275,7 @@ elif page == "Post-entrainement":
         # Check for players who didn't fill the form
         all_players = [
              "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-             "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+             "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
              "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
              "Santini","Zemoura","Tchato","Ouchen","Traoré"
           
@@ -368,7 +369,7 @@ elif page == "Joueurs":
     # Liste fixe des joueurs (normalisée aussi)
     all_players = [
          "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-         "Fischer","Gaval", "Kalai","Koffi","M'bone",  "Barbet","Benhaddou", 
+         "Fischer", "Kalai","Koffi","M'bone",  "Barbet",
          "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
          "Santini","Zemoura","Tchato","Ouchen","Traoré"
       
