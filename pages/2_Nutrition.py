@@ -115,7 +115,7 @@ data['MG %'] = data['MG %'].astype(float)
 st.sidebar.title("Nutrition")
 page = st.sidebar.selectbox("Select Page", ["Equipe", "Joueurs"])
 
-if page == "Equipe":
+if page == "Equipes":
     st.title("Etat de l'équipe")
     st.markdown("#### Choisir la date")
     if not data.empty:
@@ -181,6 +181,127 @@ if page == "Equipe":
             st.warning("No data available for the selected date.")
     else:
         st.warning("No available dates with data.")
+        
+
+elif page == "Equipe":
+    st.title("Etat de l'équipe")
+    st.markdown("#### Choisir la semaine")
+    
+    # build list of Mondays
+    mondays = sorted({
+        (d.date() - timedelta(days=d.weekday()))
+        for d in data['Date'].dropna()
+    })
+    if not mondays:
+        st.warning("No available weeks with data.")
+    else:
+        # week selector (default = latest)
+        sel_idx = len(mondays) - 1
+        selected_monday = st.selectbox(
+            "Semaine:",
+            mondays,
+            index=sel_idx,
+            format_func=lambda d: d.strftime("%d-%m-%Y")
+        )
+    
+        # key dates
+        monday    = pd.to_datetime(selected_monday)
+        tuesday   = monday + timedelta(days=1)
+        wednesday = monday + timedelta(days=2)
+        # prior calendar week range (for “Poids Semaine”)
+        last_week_start = monday - timedelta(days=7)
+        last_week_end   = last_week_start + timedelta(days=6)
+    
+        # assemble data
+        rows = []
+        for nom, grp in data.groupby('Nom'):
+            grp = grp.set_index('Date')
+            def get_p(dt):
+                try:
+                    return float(grp.at[pd.to_datetime(dt), 'Poids'])
+                except:
+                    return np.nan
+    
+            j_p3 = get_p(monday)
+            j_m3 = get_p(tuesday)
+            j_m2 = get_p(wednesday)
+    
+            # pick the most recent J-day we actually have
+            if not np.isnan(j_m2):
+                ref_day = wednesday
+            elif not np.isnan(j_m3):
+                ref_day = tuesday
+            elif not np.isnan(j_p3):
+                ref_day = monday
+            else:
+                ref_day = None
+    
+            # J-7 = 7 days before that ref_day
+            j7 = get_p(ref_day - timedelta(days=7)) if ref_day else np.nan
+    
+            week_mean = grp.loc[
+                (grp.index >= last_week_start) &
+                (grp.index <= last_week_end),
+                'Poids'
+            ].mean()
+    
+            rows.append({
+                'Nom':            nom,
+                'Poids J+3':      j_p3,
+                'Poids J-3':      j_m3,
+                'Poids J-2':      j_m2,
+                'Poids J-7':      j7,
+                'Poids Semaine':  week_mean
+            })
+    
+        final = pd.DataFrame(rows)
+    
+        # styling: highlight J‑columns based on the max–min range
+        def highlight_diff(row):
+            vals = []
+            for c in ['Poids J+3','Poids J-3','Poids J-2']:
+                if pd.notna(row[c]):
+                    vals.append(row[c])
+            diff = max(vals) - min(vals) if len(vals) >= 2 else 0
+            style_list = []
+            for col in final.columns:
+                if col in ['Poids J+3','Poids J-3','Poids J-2']:
+                    if diff >= 2:
+                        style_list.append('background-color: lightcoral; text-align: center;')
+                    elif diff >= 1.5:
+                        style_list.append('background-color: lightsalmon; text-align: center;')
+                    elif diff >= 1:
+                        style_list.append('background-color: lightyellow; text-align: center;')
+                    else:
+                        style_list.append('text-align: center;')
+                else:
+                    style_list.append('text-align: center;')
+            return style_list
+    
+        styled = (
+            final.style
+                 .apply(highlight_diff, axis=1)
+                 .format(
+                     {
+                         'Poids J+3': '{:.2f}',
+                         'Poids J-3': '{:.2f}',
+                         'Poids J-2': '{:.2f}',
+                         'Poids J-7': '{:.2f}',
+                         'Poids Semaine': '{:.2f}',
+                     },
+                     na_rep='-'
+                 )
+                 .set_table_styles([
+                     {'selector': 'th', 'props': [('text-align','center')]},
+                     {'selector': 'td', 'props': [('text-align','center')]}
+                 ])
+        )
+    
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            height=max(400, len(final) * 35)
+        )
 
 
 elif page == "Joueurs":
