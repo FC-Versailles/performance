@@ -484,7 +484,7 @@ elif page == "Entrainement":
         f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
         f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
         f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
-        f"RPE estimé : <b>{session_ERPE:.1f}</b> &nbsp; | &nbsp; "
+        f"RPE estimé : <b>{session_ERPE:.0f}</b> &nbsp; | &nbsp; "
         f"Indicateur : <b>{indicateur:.1f}%</b>",
         unsafe_allow_html=True
     )
