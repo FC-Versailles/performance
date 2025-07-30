@@ -24,6 +24,7 @@ from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
 import plotly.express as px
 from datetime import date
+from datetime import datetime, timedelta
 
 # Constants for Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
