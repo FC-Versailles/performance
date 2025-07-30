@@ -123,7 +123,7 @@ if "Date" in data.columns:
     
 # Sidebar for navigation
 st.sidebar.title("Wellness")
-page = st.sidebar.radio("", ["Pre-entrainement","Post-entrainement"])
+page = st.sidebar.selectbox("Select Page", ["Pre-entrainement","Post-entrainement","Joueurs"])
 
 if page == "Pre-entrainement":
     st.header("État de l'équipe")
