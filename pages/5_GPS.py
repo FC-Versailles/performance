@@ -163,7 +163,7 @@ if "Date" in data.columns:
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
     
 player_positions = {
-    "ADEHOUNI":   "PIS",
+    "ADEHOUMI":   "PIS",
     "BEN BRAHIM": "ATT",
     "BENHADDOUD": "M",
     "CALVET":     "DC",
@@ -420,6 +420,7 @@ elif page == "Entrainement":
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
     
     # ====== AM/PM/Total logic (ultra minimal, robust) ======
+# ====== AM/PM/Total logic (ultra minimal, robust) ======
     if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
         ampm_unique = sorted([
             str(x) for x in date_df["AMPM"].dropna().unique()
@@ -460,7 +461,6 @@ elif page == "Entrainement":
     if filtered_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
         st.stop()
-    
     # --- Résumé JOURNÉE ---
     erpe_col = next((c for c in filtered_df.columns if c.lower() == "rpe"), None)
     if erpe_col is not None:
@@ -825,6 +825,159 @@ elif page == "Entrainement":
                                                                      
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
     
+
+    
+    
+        
+    # === CHARGE DU JOUR : z-score vs moyenne par position (fallback global) ===
+    st.markdown("### ⚖️ Charge du jour")
+    
+    charge_metrics = ["Distance", "Distance 15km/h", "Distance 20-25km/h", "Distance 25km/h"]
+    
+    # 1. Refiltrer la séance choisie (sel_date + sel_ampm)
+    train_data = data[data["Type"].isin(allowed_tasks)].copy()
+    date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
+    
+    if "AMPM" in date_df.columns and 'sel_ampm' in locals() and sel_ampm != "Total":
+        session_df = date_df[date_df["AMPM"] == sel_ampm].copy()
+    else:
+        # Agrégation "Total" par joueur
+        num_cols = [c for c in date_df.columns if c in [
+            "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+            "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Distance 90% Vmax"
+        ]]
+        for c in num_cols + ["RPE", "Vmax"]:
+            if c in date_df.columns:
+                date_df[c] = pd.to_numeric(
+                    date_df[c].astype(str)
+                               .str.replace(r"[^\d\-,\.]", "", regex=True)
+                               .str.replace(",", ".", regex=False)
+                               .str.replace("\u202f", "", regex=False),
+                    errors="coerce"
+                )
+        agg_dict = {c: "sum" for c in num_cols}
+        for c in ["RPE", "Vmax"]:
+            if c in date_df.columns:
+                agg_dict[c] = "mean"
+        session_df = date_df.groupby("Name", as_index=False).agg(agg_dict)
+    
+    # 2. Construire charge_df et assigner position
+    def clean_numeric_series(s):
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace("\u202f", "", regex=False),
+            errors="coerce"
+        )
+    
+    charge_df = session_df[["Name"] + [c for c in charge_metrics if c in session_df.columns]].copy()
+    for m in charge_metrics:
+        if m in charge_df.columns:
+            charge_df[m] = clean_numeric_series(charge_df[m])
+    charge_df["Pos"] = charge_df["Name"].str.upper().map(player_positions).fillna("NC")
+    
+    # 3. Stats par position sur la séance (mean/std) avec contrôle (>=2 joueurs)
+    pos_stats = {}
+    for pos, grp in charge_df.groupby("Pos"):
+        pos_stats[pos] = {}
+        for metric in charge_metrics:
+            vals = grp[metric].dropna().astype(float)
+            if len(vals) >= 2:
+                pos_stats[pos][f"{metric}_mean"] = vals.mean()
+                pos_stats[pos][f"{metric}_std"]  = vals.std(ddof=1)
+            else:
+                pos_stats[pos][f"{metric}_mean"] = np.nan
+                pos_stats[pos][f"{metric}_std"]  = np.nan
+    
+    # 4. Fallback global (toute séance) si position insuffisante
+    global_stats = {}
+    for metric in charge_metrics:
+        all_vals = charge_df[metric].dropna().astype(float)
+        if len(all_vals) >= 2:
+            global_stats[f"{metric}_mean"] = all_vals.mean()
+            global_stats[f"{metric}_std"]  = all_vals.std(ddof=1)
+        else:
+            global_stats[f"{metric}_mean"] = np.nan
+            global_stats[f"{metric}_std"]  = np.nan
+    
+    # 5. Calcul des z-scores : positionnels avec fallback
+    display = charge_df[["Name", "Pos"]].copy()
+    
+    def compute_z(row, metric):
+        pos = row["Pos"]
+        val = row.get(metric)
+        if pd.isna(val):
+            return np.nan
+        mean = pos_stats.get(pos, {}).get(f"{metric}_mean", np.nan)
+        std  = pos_stats.get(pos, {}).get(f"{metric}_std", np.nan)
+        source = "position"
+        if pd.isna(mean) or pd.isna(std) or std == 0:
+            mean = global_stats.get(f"{metric}_mean", np.nan)
+            std  = global_stats.get(f"{metric}_std", np.nan)
+            source = "global"
+        if pd.isna(mean) or pd.isna(std) or std == 0:
+            return np.nan
+        z = (val - mean) / std
+        return round(z, 2)
+    
+    for metric in charge_metrics:
+        display[metric] = charge_df.apply(lambda r: compute_z(r, metric), axis=1)
+    
+    # 6. Affichage coloré
+    cmap_z = matplotlib.cm.get_cmap("RdYlGn_r")
+    norm = matplotlib.colors.Normalize(vmin=-2, vmax=2, clip=True)
+    
+    def color_by_z(val):
+        if pd.isna(val):
+            return ""
+        return f"background-color:{mcolors.rgb2hex(cmap_z(norm(val)))};"
+    
+    styled = (
+        display.style
+               .format({m: "{:.2f}" for m in charge_metrics})
+               .set_table_styles([
+                   {"selector": "th", "props": [("background-color", "#0031E3"), ("color", "white"), ("text-align", "center")]},
+                   {"selector": "td", "props": [("text-align", "center")]}
+               ])
+    )
+    for metric in charge_metrics:
+        styled = styled.applymap(color_by_z, subset=[metric])
+    
+    
+        # calcul dynamique
+    n_rows = display.shape[0] + 1  # y compris header
+    n_cols = display.shape[1]
+    height = min(1000, 40 * n_rows)    # limite à 1000px max
+    width  = min(1600, 200 * n_cols)   # ~200px par colonne, cap à 1600px
+    
+    html = f"""
+    <html>
+      <head>
+        <style>
+          .centered-table {{
+            border-collapse: collapse;
+            border-spacing: 1;
+            width:120%;
+            margin:2;
+          }}
+          .centered-table th, .centered-table td {{
+            padding:6px;
+            text-align:center;
+            border:1px solid #ddd;
+          }}
+          .centered-table th{{ background-color:#0031E3; color:white; }}
+          body {{ margin:1; padding:1; }}
+        </style>
+      </head>
+      <body>
+        {styled.hide(axis="index").to_html()}
+      </body>
+    </html>
+    """
+    components.html(html, height=height, width=width, scrolling=True)
+
+        
     st.markdown("#### 📊 Analyse Semaine")
 
     # Use different allowed_tasks for weekly analysis
@@ -1592,6 +1745,8 @@ elif page == "Match":
 
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
+
+
 elif page == "Joueurs":
     st.subheader("🔎 Analyse d'un joueur")
 
