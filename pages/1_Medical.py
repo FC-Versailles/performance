@@ -121,9 +121,9 @@ if 'Date' in df.columns:
 st.sidebar.title("FC Versailles Medical")
 page = st.sidebar.selectbox(
     "Select Page",
-    ["Rapport Quotidien", "Historique du Joueur", "Rappport de blessure", "Bilan Médical"])
+    ["Rapport Quotidien","Bilan Médical", "Joueurs", "Blessures FCV"])
 
-if page == "Historique du Joueur":
+if page == "Joueurs":
     st.title("Fiche Joueur")
 
     player_name = st.selectbox("Select Player", sorted(df['Nom'].dropna().unique()))
@@ -184,7 +184,7 @@ if page == "Historique du Joueur":
         st.dataframe(rtp_data, use_container_width=True)
 
 
-elif page == "Rappport de blessure":
+elif page == "Blessures FCV":
     st.title("Rapport de Blessure")
 
     # Assurer que la colonne Date est en datetime pour trier si besoin
@@ -213,6 +213,27 @@ elif page == "Rappport de blessure":
 
 elif page == "Rapport Quotidien":
     st.title("Quotidien Médical")
+    
+    # Bouton "Questionnaire" avec lien externe
+    questionnaire_url = "https://tally.so/r/wk7MB6"
+    st.markdown(
+        f'''
+        <a href="{questionnaire_url}" target="_blank" style="
+            display: inline-block;
+            padding: 10px 18px;
+            background-color: #2563eb;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        ">
+            Questionnaire
+        </a>
+        ''',
+        unsafe_allow_html=True
+    )
+    #st.markdown(f"Si rien ne s'ouvre, clique ici : [Questionnaire]({questionnaire_url})")
 
 
     # Convertir la colonne Date en datetime
@@ -228,8 +249,10 @@ elif page == "Rapport Quotidien":
     daily_data = df[df['Date'].dt.date == selected_date]
     daily_data = daily_data[daily_data['Motif consultation'] == "Rapport"]
     
-    if daily_data.empty:
+    consultant_missing_or_blank = daily_data['Consultant'].fillna("").str.strip() == ""
+    if daily_data.empty or (not daily_data.empty and consultant_missing_or_blank.all()):
         st.write("Pas de rapport médical aujourd'hui")
+
     else:
         display_columns = [
             'Nom',
@@ -274,14 +297,61 @@ elif page == "Rapport Quotidien":
         # Only render when there is data
         st.markdown(render_colored_table_centered(rapport_table), unsafe_allow_html=True)
     
+    consultant_missing_or_blank = daily_data['Diagnostic'].fillna("").str.strip() == ""
+    if daily_data.empty or (not daily_data.empty and consultant_missing_or_blank.all()):
+        st.write("")
+    else:
+        display_columns = [
+            'Nom',
+            'Localisation du soin',
+            'Diagnostic',
+            'Prise en charge',
+            'Stade de reprise',
+
+        ]
+        column_rename = {
+            'Nom': 'Nom',
+            'Localisation du soin': 'Localisation',
+            'Consultant': 'Consultant',
+            'Diagnostic': 'Diagnostic',
+            'Prise en charge': 'Prise en charge',
+            'Stade de reprise': 'Stade de reprise',
+
+        }
+    
+        ordered_cols = [col for col in display_columns if col in daily_data.columns]
+        rapport_table = daily_data[ordered_cols].copy().rename(columns=column_rename)
+    
+        rapport_table = rapport_table.loc[:, ~rapport_table.columns.str.contains('^Unnamed')]
+        rapport_table.index = range(len(rapport_table))
+        rapport_table.index.name = None
+    
+        def rrender_colored_table_centered(df):
+            html = '<table style="border-collapse:collapse;width:100%;">'
+            html += '<tr style="background-color:#0031E3;color:#fff;text-align:center;">'
+            for col in df.columns:
+                html += f'<th style="padding:8px;border:1px solid #ddd;text-align:center;">{col}</th>'
+            html += '</tr>'
+            for _, row in df.iterrows():
+                html += '<tr>'
+                for cell in row:
+                    html += f'<td style="padding:8px;border:1px solid #ddd;text-align:center;">{cell if pd.notna(cell) else ""}</td>'
+                html += '</tr>'
+            html += '</table>'
+            return html
+    
+        # Only render when there is data
+        st.markdown(rrender_colored_table_centered(rapport_table), unsafe_allow_html=True)
+    
+    
     all_players = df['Nom'].dropna().unique()
     total_players = len(all_players)
     
     dai_data = df[df['Date'].dt.date == selected_date]
     # Players unavailable today
-    maladie_today = dai_data[dai_data['Motif consultation'].str.lower() == 'maladie']['Nom'].dropna().unique()
-    rtp_today = dai_data[dai_data['Motif consultation'].str.lower() == 'réathlétisation']['Nom'].dropna().unique()
-    absent_today = dai_data[dai_data['Motif consultation'].str.lower() == 'absent']['Nom'].dropna().unique()
+    maladie_today = dai_data[dai_data['Motif consultation'].str.lower() == 'Maladie']['Nom'].dropna().unique()
+    rtp_today = dai_data[dai_data['Motif consultation'].str.lower() == 'Réathlétisation']['Nom'].dropna().unique()
+    absent_today = dai_data[dai_data['Motif consultation'].str.lower() == 'Absent']['Nom'].dropna().unique()
     
     # Combine both unavailabilities
     unavailable_players = set(maladie_today).union(set(rtp_today))
@@ -344,6 +414,7 @@ elif page == "Rapport Quotidien":
             st.dataframe(motif_data[available_columns], use_container_width=True)
         else:
             st.write("--")
+
 
 elif page == "Bilan Médical":
     st.title("Bilan Médical")
