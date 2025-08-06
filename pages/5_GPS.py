@@ -29,7 +29,11 @@ import plotly.graph_objects as go
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-st.set_page_config(layout='wide')
+try:
+    st.set_page_config(layout='wide')
+except st.StreamlitAPIException:
+    pass
+
 col1, col2 = st.columns([9,1])
 with col1:
     st.title("GPS | FC Versailles")
