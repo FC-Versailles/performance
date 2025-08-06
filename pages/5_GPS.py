@@ -676,12 +676,13 @@ elif page == "Entrainement":
         <style>
           .centered-table {{
             border-collapse: collapse;
-            min-width: 1200px;
-            white-space: nowrap;
+            min-width: 1200px;          /* force une largeur minimale */
+            white-space: nowrap;        /* empêche le retour à la ligne */
+            font-size: 12px;             /* texte plus petit */
           }}
           .centered-table th, .centered-table td {{
             text-align: center;
-            padding: 4px 8px;
+            padding: 2px 4px;           /* padding réduit */
             border: 1px solid #ddd;
           }}
           .centered-table th {{
@@ -691,7 +692,11 @@ elif page == "Entrainement":
         </style>
       </head>
       <body>
-        <div style="max-height:{iframe_height}px; overflow-y:auto; overflow-x:auto; white-space: nowrap;">
+        <div style="
+             max-height: {iframe_height}px;
+             overflow-y: auto;
+             overflow-x: auto;
+          ">
           {html_obj}
         </div>
       </body>
@@ -701,10 +706,9 @@ elif page == "Entrainement":
     components.html(
         html_template,
         height=iframe_height,
-        width=1500,
-        scrolling=True
-)
-
+        width=1500,     # suffisamment large pour déclencher le scroll horizontal
+        scrolling=True  # active les scrollbars
+    )
 
     # ── Export PDF with same colored table fit to A4 landscape ───────────────
     if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
