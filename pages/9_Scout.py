@@ -52,7 +52,7 @@ def check_scout_login():
 
 check_scout_login()
 
-st.set_page_config(layout='wide')
+#st.set_page_config(layout='wide')
 
 # Display the club logo from GitHub at the top right
 logo_url = 'https://raw.githubusercontent.com/FC-Versailles/scouting/main/logo.png'
