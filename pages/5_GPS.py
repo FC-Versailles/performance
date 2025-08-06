@@ -662,7 +662,6 @@ elif page == "Entrainement":
             return ""
     styled = styled.applymap(rpe_color, subset=["RPE"])
     
-    import re
     html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
     
     total_rows = df_sorted.shape[0] + 1
@@ -678,7 +677,7 @@ elif page == "Entrainement":
             border-collapse: collapse;
             min-width: 1200px;          /* force une largeur minimale */
             white-space: nowrap;        /* empêche le retour à la ligne */
-            font-size: 12px;             /* texte plus petit */
+            font-size: 11.5px;             /* texte plus petit */
           }}
           .centered-table th, .centered-table td {{
             text-align: center;
