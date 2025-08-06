@@ -50,7 +50,7 @@ with col2:
 with col3:
     create_card("Wellness", "Suivi quotidien pré et post-entrainement.", "🧘", "pages/3_Wellness.py")
     create_card("Game Analysis", "Données des matchs, stats collectives et phases de jeu.", "🎯", "pages/6_Game_Analysis.py")
-    create_card("Scouting", "Données statsbomb sur les joueurs.", "⚽️", "pages/9_Scout.py")
+    #create_card("Scouting", "Données statsbomb sur les joueurs.", "⚽️", "pages/9_Scout.py")
     
 
 
