@@ -1120,21 +1120,45 @@ elif page == "Entrainement":
     row_height = 28
     iframe_height = header_height + total_rows * row_height
     
-    wrapper = f"""
+    html_template = f"""
     <html>
       <head>
         <style>
-          .centered-table{{border-collapse:collapse;width:100%;}}
-          .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
-          .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
-          .centered-table th, .centered-table td {{border:1px solid #ddd;}}
-          .centered-table th{{background-color:#0031E3;color:white;}}
+          .centered-table {{
+            border-collapse: collapse;
+            min-width: 1200px;          /* force une largeur minimale */
+            white-space: nowrap;        /* empêche le retour à la ligne */
+            font-size: 11.5px;             /* texte plus petit */
+          }}
+          .centered-table th, .centered-table td {{
+            text-align: center;
+            padding: 2px 4px;           /* padding réduit */
+            border: 1px solid #ddd;
+          }}
+          .centered-table th {{
+            background-color: #0031E3;
+            color: white;
+          }}
         </style>
       </head>
-      <body>{html_obj}</body>
+      <body>
+        <div style="
+             max-height: {iframe_height}px;
+             overflow-y: auto;
+             overflow-x: auto;
+          ">
+          {html_obj}
+        </div>
+      </body>
     </html>
     """
-    components.html(wrapper, height=iframe_height, scrolling=False)
+    
+    components.html(
+        html_template,
+        height=iframe_height,
+        width=1500,     # suffisamment large pour déclencher le scroll horizontal
+        scrolling=True  # active les scrollbars
+    )
 
     st.markdown("#### 📊 Analyse collective")
     
