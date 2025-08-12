@@ -88,7 +88,7 @@ st.cache_data.clear()
 def main():
 
     # --- Bouton "Questionnaire" (lien externe) ---
-    questionnaire_url = "https://tally.so/forms/3ql17d/share"
+    questionnaire_url = "https://tally.so/r/3ql17d"
     st.markdown(
         f'''
         <a href="{questionnaire_url}" target="_blank" style="
