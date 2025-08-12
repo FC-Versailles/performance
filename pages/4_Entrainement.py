@@ -24,6 +24,20 @@ TOKEN_FILE = 'token_ent.pickle'  # Replace with your credentials file path
 SPREADSHEET_ID = '15n4XkQHrUpSPAW61vmR_Rk1kibd5zcmVqgHA40szlPg'  # Replace with your actual Spreadsheet ID
 RANGE_NAME = 'Feuille 1'  # Replace with your range name
 
+st.set_page_config(layout='wide')
+
+# Display the club logo from GitHub at the top right
+logo_url = 'https://raw.githubusercontent.com/FC-Versailles/care/main/logo.png'
+col1, col2 = st.columns([9, 1])
+with col1:
+    st.title("Entrainement | FC Versailles")
+with col2:
+    st.image(logo_url, use_container_width=True)
+    
+# Add a horizontal line to separate the header
+st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
+
+
 # Function to get Google Sheets credentials
 def get_credentials():
     creds = None
@@ -72,17 +86,27 @@ st.cache_data.clear()
 
 # Streamlit App
 def main():
-    st.set_page_config(layout='wide')
-    st.title("FC Versailles - Analyse des Entraînements")
-    
-    # Add a button to redirect to a data collection form
-    url = "https://tally.so/r/3X1vz4"  # Replace with your desired URL
-    if st.button("Collecter la donnée"):
-        js = f"window.open('{url}')"
-        html = f'<script>{js}</script>'
-        st.markdown(html, unsafe_allow_html=True)
-    
-    # Load data from Google Sheets
+
+    # --- Bouton "Questionnaire" (lien externe) ---
+    questionnaire_url = "https://tally.so/forms/3ql17d/share"
+    st.markdown(
+        f'''
+        <a href="{questionnaire_url}" target="_blank" style="
+            display: inline-block;
+            padding: 10px 18px;
+            background-color: #2563eb;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        ">
+            Questionnaire
+        </a>
+        ''',
+        unsafe_allow_html=True
+    )
+
     data = load_data()
     
     if not data.empty:
@@ -152,6 +176,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
