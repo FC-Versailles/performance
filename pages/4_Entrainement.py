@@ -17,7 +17,7 @@ from google.auth.transport.requests import Request
 from datetime import date
 
 # ─────────────────────────── Config ───────────────────────────
-st.set_page_config(page_title="Analyse | FC Versailles", layout='wide')
+st.set_page_config(page_title="Entrainement | FC Versailles", layout='wide')
 
 logo_url = 'https://raw.githubusercontent.com/FC-Versailles/care/main/logo.png'
 
