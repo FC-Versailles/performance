@@ -20,8 +20,8 @@ from datetime import date
 
 # Constants for Google Sheets
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE = 'token_ent.pickle'  # Replace with your credentials file path
-SPREADSHEET_ID = '15n4XkQHrUpSPAW61vmR_Rk1kibd5zcmVqgHA40szlPg'  # Replace with your actual Spreadsheet ID
+TOKEN_FILE_EN = 'token_ent.pickle'  # Replace with your credentials file path
+SPREADSHEET_ID_EN = '15n4XkQHrUpSPAW61vmR_Rk1kibd5zcmVqgHA40szlPg'  # Replace with your actual Spreadsheet ID
 RANGE_NAME = 'Feuille 1'  # Replace with your range name
 
 st.set_page_config(layout='wide')
@@ -39,10 +39,10 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 
 # Function to get Google Sheets credentials
-def get_credentials():
+def get_en_credentials():
     creds = None
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, 'rb') as token:
+    if os.path.exists(TOKEN_FILE_EN):
+        with open(TOKEN_FILE_EN, 'rb') as token:
             creds = pickle.load(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -52,13 +52,13 @@ def get_credentials():
                 'client_secret.json', SCOPES
             )
             creds = flow.run_local_server(port=0)
-        with open(TOKEN_FILE, 'wb') as token:
+        with open(TOKEN_FILE_EN, 'wb') as token:
             pickle.dump(creds, token)
     return creds
 
 # Function to fetch data from Google Sheet
 def fetch_google_sheet(spreadsheet_id, range_name):
-    creds = get_credentials()
+    creds = get_en_credentials()
     service = build('sheets', 'v4', credentials=creds)
     sheet = service.spreadsheets()
     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
@@ -77,7 +77,7 @@ def fetch_google_sheet(spreadsheet_id, range_name):
 # Streamlit cache for loading data
 @st.cache_data(ttl=60)
 def load_data():
-    data = fetch_google_sheet(SPREADSHEET_ID, RANGE_NAME)
+    data = fetch_google_sheet(SPREADSHEET_ID_EN, RANGE_NAME)
     data = data[~data['Type'].isin(['Salle', 'Dev Individuel'])]
     return data
 
