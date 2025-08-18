@@ -19,3 +19,4 @@ openpyxl
 adjustText
 xlsxwriter
 highlight-text
+ollama
