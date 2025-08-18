@@ -18,3 +18,4 @@ requests_cache
 openpyxl
 adjustText
 xlsxwriter
+highlight-text
