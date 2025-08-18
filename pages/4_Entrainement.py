@@ -15,6 +15,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from datetime import date
+import numpy as np
+import re, unicodedata
+import textwrap
+import ollama
 
 # ─────────────────────────── Config ───────────────────────────
 st.set_page_config(page_title="Entrainement | FC Versailles", layout='wide')
@@ -110,7 +114,8 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ───────────────────────── Page selector (sidebar OK) ─────────────────────────
 # Sidebar page selector (dropdown instead of radio)
-page = st.sidebar.selectbox("Page", ["Analyse entrainement", "Analyse daily"], index=0)
+
+page = st.sidebar.selectbox("Page", ["Analyse daily","Analyse entrainement"], index=0)
 
 
 # ───────────────────────── Common helpers ─────────────────────────
@@ -216,9 +221,9 @@ def render_entrainement():
     if session_types is not None:
         filtered = filtered[filtered['Type'].isin(session_types)]
 
-    # Vue table + visuels
-    st.markdown("### Données filtrées (Entraînement)")
-    st.dataframe(filtered, use_container_width=True)
+    # # Vue table + visuels
+    # st.markdown("### Données filtrées (Entraînement)")
+    # st.dataframe(filtered, use_container_width=True)
 
     st.markdown("### Répartition des activités")
     plot_treemap_from_activity_cols(filtered)
@@ -268,7 +273,6 @@ def render_daily():
         return
 
     # ── UNIQUE FILTRE : Date unique
-    st.subheader("Filtre date (Daily)")
     min_d = valid_dates.min().date()
     max_d = valid_dates.max().date()
     sel_date = st.date_input("Date", value=max_d, min_value=min_d, max_value=max_d)
@@ -278,23 +282,371 @@ def render_daily():
         st.info("Aucune ligne pour la date sélectionnée.")
         return
 
-    st.markdown(f"### Données (Daily) — {sel_date.isoformat()}")
-    st.dataframe(filtered, use_container_width=True)
+    def _norm(s: str) -> str:
+        """minuscule, sans accents, espaces normalisés, conserve (a)/(b)."""
+        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+        s = s.lower().strip()
+        s = re.sub(r"[^a-z0-9()]+", " ", s)  # retire tout sauf lettres/chiffres/()
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+    
+    def _find_best_col(df_cols, target_label):
+        """Retourne le nom de colonne du DF qui correspond au label cible."""
+        target = _norm(target_label)
+        norm_map = {c: _norm(c) for c in df_cols}
+    
+        # 1) correspondance exacte
+        for col, nc in norm_map.items():
+            if nc == target:
+                return col
+        # 2) tolère pluriel/singulier (retire 's' final)
+        if target.endswith("s"):
+            t2 = target[:-1]
+            for col, nc in norm_map.items():
+                if nc == t2:
+                    return col
+        # 3) tolère suffixes pandas (ex: '... (a).1') via startswith
+        for col, nc in norm_map.items():
+            if nc.startswith(target):
+                return col
+        # 4) startswith sans 's' final
+        t3 = target[:-1] if target.endswith("s") else target
+        for col, nc in norm_map.items():
+            if nc.startswith(t3):
+                return col
+        return None
+    
+    wanted = [
+        "Type", "Coach",
+        "Représentativité (a)", "Représentativité (b)",
+        "Contrainte (a)", "Contraintes (b)",
+        "Différentielle (a)", "Différentielle (b)",
+        "Défi (a)", "Défi (b)",
+        "Connaissance (a)", "Connaissance (b)",
+        "Pression (a)", "Pression (b)",
+        "video (a)", "video (b)"
+    ]
+    
+    matched_cols = []
+    display_names = []
+    missing = []
+    
+    for w in wanted:
+        col = _find_best_col(filtered.columns, w)
+        if col and col not in matched_cols:
+            matched_cols.append(col)
+            display_names.append(w)  # on renomme avec le label propre
+        else:
+            missing.append(w)
+    
+    if matched_cols:
+        df_show = filtered.loc[:, matched_cols].copy()
+        df_show.columns = display_names
+        st.dataframe(df_show, use_container_width=True)
+    else:
+        st.info("Aucune des colonnes ciblées n'a été trouvée dans les données.")
+    
+    # Optionnel : indiquer les colonnes manquantes
+    if missing:
+        st.caption("Colonnes non trouvées : " + ", ".join(missing))
+    
+        # Visuels optionnels si colonnes 'Temps*' présentes
+        has_temps_cols = any(str(c).startswith('Temps') for c in filtered.columns)
+        if has_temps_cols:
+            st.markdown("### Répartition des activités (Daily)")
+            plot_treemap_from_activity_cols(filtered)
+    
+            st.markdown("### Répartition par Type (Daily)")
+            plot_stacked_by_type(filtered)
+    
+            st.markdown("### Contenus par date (Daily)")
+            plot_scatter_date_content(filtered)
+    
+    def _norm(s: str) -> str:
+        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+        s = s.lower().strip()
+        s = re.sub(r"[^a-z0-9()]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+    
+    def _find_cols(df, targets, startswith=False):
+        out = {}
+        norm_map = {c: _norm(c) for c in df.columns}
+        for t in targets:
+            nt = _norm(t)
+            found = None
+            # exact
+            for col, nc in norm_map.items():
+                if nc == nt:
+                    found = col; break
+            # startswith (tolère suffixes .1)
+            if not found:
+                for col, nc in norm_map.items():
+                    if (nc.startswith(nt) if startswith else nc == nt) or nc.startswith(nt):
+                        found = col; break
+            out[t] = found
+        return out
+    
+    def _collect_prefixed_cols(df, prefix_norm: str):
+        """Retourne toutes les colonnes dont le nom normalisé commence par prefix_norm."""
+        cols = []
+        for c in df.columns:
+            if _norm(c).startswith(prefix_norm):
+                cols.append(c)
+        return cols
+    
+    def _to_float(series: pd.Series) -> pd.Series:
+        if series.dtype.kind in "biufc":
+            return pd.to_numeric(series, errors="coerce")
+        return pd.to_numeric(series.astype(str).str.replace(",", ".", regex=False), errors="coerce")
+    
+    def build_training_report(filtered: pd.DataFrame) -> str:
+        # ---------- Colonnes de contexte ----------
+        ctx_cols = _find_cols(filtered, ["Date","Moment","Type","Coach"])
+        date_col   = ctx_cols["Date"]
+        moment_col = ctx_cols["Moment"]
+        type_col   = ctx_cols["Type"]
+        coach_col  = ctx_cols["Coach"]
+    
+        # ---------- Colonnes notes (1–3) ----------
+        kpi_labels = [
+            "Représentativité (a)", "Représentativité (b)",
+            "Contrainte (a)", "Contraintes (b)",
+            "Différentielle (a)", "Différentielle (b)",
+            "Défi (a)", "Défi (b)",
+            "Connaissance (a)", "Connaissance (b)",
+            "Pression (a)", "Pression (b)",
+            "Vidéo (a)", "Vidéo (b)"
+        ]
+        kpi_map = _find_cols(filtered, kpi_labels, startswith=True)  # tolère variantes
+        kpi_found = {k:v for k,v in kpi_map.items() if v is not None}
+    
+        # Numérise les KPI trouvés
+        df_num = filtered.copy()
+        for lab, col in kpi_found.items():
+            df_num[col] = _to_float(df_num[col])
+    
+        # ---------- Colonnes commentaires ----------
+        # On prend toutes les variantes: "Commentaire (a)", "Commentaire (b)" + duplicatas .1/.2
+        com_a_cols = _collect_prefixed_cols(filtered, _norm("Commentaire (a)"))
+        com_b_cols = _collect_prefixed_cols(filtered, _norm("Commentaire (b)"))
+        comment_cols = com_a_cols + com_b_cols
+        # Colonne texte consolidée
+        def _row_comments(row):
+            parts = []
+            for c in comment_cols:
+                val = row.get(c, None)
+                if pd.notna(val) and str(val).strip():
+                    who = row.get(coach_col, "Coach")
+                    parts.append((str(who), str(val).strip()))
+            return parts
+    
+        # ---------- En-tête / contexte ----------
+        # date unique ou plage si plusieurs
+        if date_col and date_col in filtered.columns:
+            try:
+                dts = pd.to_datetime(filtered[date_col], errors="coerce").dt.date.dropna()
+            except Exception:
+                dts = pd.Series([], dtype="object")
+        else:
+            dts = pd.Series([], dtype="object")
+        date_str = ""
+        if not dts.empty:
+            dmin, dmax = dts.min(), dts.max()
+            date_str = f"du {dmin}" if dmin != dmax else f"du {dmin}"
+            if dmin != dmax:
+                date_str = f"du {dmin} au {dmax}"
+    
+        moments = sorted(set(str(x).strip() for x in filtered.get(moment_col, pd.Series(dtype=object)).dropna()))
+        types   = sorted(set(str(x).strip() for x in filtered.get(type_col, pd.Series(dtype=object)).dropna()))
+        coachs  = [str(x).strip() for x in filtered.get(coach_col, pd.Series(dtype=object)).dropna()]
+        coachs_unique = sorted(set(coachs))
+    
+        # ---------- Statistiques globales ----------
+        n_feedback = len(filtered)
+        # Moyennes par critère (tri décroissant)
+        crit_means = []
+        for lab, col in kpi_found.items():
+            m = df_num[col].mean(skipna=True)
+            if pd.notna(m):
+                crit_means.append((lab, m))
+        crit_means.sort(key=lambda x: (-x[1], x[0]))
+    
+        # ---------- Moyennes par coach & forces/faiblesses ----------
+        per_coach = {}
+        for c in coachs_unique:
+            sub = df_num[df_num[coach_col].astype(str).str.strip() == c] if coach_col in df_num.columns else df_num.iloc[0:0]
+            means = {lab: sub[col].mean(skipna=True) for lab, col in kpi_found.items()}
+            per_coach[c] = means
+    
+        # Différences & complémentarités
+        # Force: critère où coach > moyenne globale + 0.3 ; Faiblesse: < moyenne globale - 0.3
+        global_means = {lab: np.nanmean(df_num[col]) for lab, col in kpi_found.items()}
+        strengths = {}
+        weaknesses = {}
+        for c, means in per_coach.items():
+            s, w = [], []
+            for lab, m in means.items():
+                g = global_means.get(lab, np.nan)
+                if pd.notna(m) and pd.notna(g):
+                    if m >= g + 0.3:
+                        s.append(lab)
+                    elif m <= g - 0.3:
+                        w.append(lab)
+            strengths[c] = s
+            weaknesses[c] = w
+    
+        # Paires complémentaires: A fort sur X et B faible sur X
+        pairs = []
+        for lab in global_means.keys():
+            strong = [c for c in coachs_unique if lab in strengths.get(c, [])]
+            weak   = [c for c in coachs_unique if lab in weaknesses.get(c, [])]
+            for a in strong:
+                for b in weak:
+                    if a != b:
+                        pairs.append((lab, a, b))
+    
+        # ---------- Regroupement thématique des commentaires ----------
+        # Règles simples par mots-clés (tu pourras ajuster)
+        theme_keywords = {
+            "Représentativité & structure": ["representativ", "structure", "carr", "positionnement", "jdp", "grand jeu"],
+            "Contraintes & règles": ["contrainte", "regle", "scores", "points", "limitation"],
+            "Différentielle & intensité": ["differenti", "intens", "charge", "rythme", "effort"],
+            "Défi & créativité": ["defi", "creativ", "initiative", "prise de risque", "oser"],
+            "Connaissance & compréhension": ["connaiss", "comprehension", "principe", "references", "concept"],
+            "Pression & comportement": ["pression", "comport", "stress", "tolérance a l echec", "echec"],
+            "Vidéo & préparation": ["video", "analyse video", "preview", "avant seance"],
+            "Corrections & autonomie": ["correctif", "correction", "autonomie", "brief", "feedback"]
+        }
+        def detect_theme(txt: str) -> str:
+            n = _norm(txt)
+            for theme, kws in theme_keywords.items():
+                for kw in kws:
+                    if kw in n:
+                        return theme
+            return "Autres"
+    
+        themed = {}  # theme -> list[(coach, comment)]
+        for _, row in filtered.iterrows():
+            who = str(row.get(coach_col, "Coach")).strip()
+            for c in comment_cols:
+                val = row.get(c, None)
+                if pd.notna(val):
+                    txt = str(val).strip()
+                    if txt:
+                        th = detect_theme(txt)
+                        themed.setdefault(th, []).append((who, txt))
+    
+        # ---------- Construction du Markdown ----------
+        lines = []
+        lines.append(f"### Rapport de séance {date_str}")
+        lines.append("")
+        # Synthèse générale
+        lines.append("#### 📊 Synthèse générale")
+        synth = {
+            "Nombre total de retours": n_feedback,
+            "Coachs ayant répondu": ", ".join(coachs_unique) if coachs_unique else "—",
+            "Moment couvert": ", ".join(moments) if moments else "—",
+            "Type de séance": ", ".join(types) if types else "—",
+        }
+        for k,v in synth.items():
+            lines.append(f"- **{k}** : {v}")
+        lines.append("")
+    
+        # Évaluations chiffrées
+        if crit_means:
+            lines.append("#### 📈 Classement des critères par moyenne (1 = moindre, 3 = très positif)")
+            lines.append("")
+            for lab, m in crit_means:
+                lines.append(f"- **{lab}** : {m:.2f}")
+            lines.append("")
+        else:
+            lines.append("*(Aucun critère chiffré disponible)*\n")
+    
+    
+        # Observations qualitatives par thème et coach
+        lines.append("#### 💬 Observations qualitatives par thème et coach")
+        if themed:
+            for th in sorted(themed.keys()):
+                lines.append(f"**{th}**")
+                for who, txt in themed[th]:
+                    # wrap léger pour lisibilité
+                    txt_w = textwrap.fill(txt, width=110)
+                    lines.append(f"- **{who}** : {txt_w}")
+                lines.append("")
+        else:
+            lines.append("*(Aucun commentaire saisi)*\n")
+    
+        # Axes d'amélioration — à partir des faiblesses récurrentes
+        lines.append("#### 📌 Axes d’amélioration (d’après tendances)")
+        if weaknesses:
+            # Compter par critère combien de coachs l'ont en faiblesse
+            counts = {}
+            for c, ws in weaknesses.items():
+                for lab in ws:
+                    counts[lab] = counts.get(lab, 0) + 1
+            if counts:
+                top_issues = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:6]
+                for lab, n in top_issues:
+                    lines.append(f"- **{lab}** : {n} coach(s) en-dessous de la moyenne — prévoir focus spécifique")
+            else:
+                lines.append("- RAS (aucun critère en-dessous de la moyenne globale)")
+        else:
+            lines.append("- RAS")
+        lines.append("")
+    
+        return "\n".join(lines)
 
-    # Visuels optionnels si colonnes 'Temps*' présentes
-    has_temps_cols = any(str(c).startswith('Temps') for c in filtered.columns)
-    if has_temps_cols:
-        st.markdown("### Répartition des activités (Daily)")
-        plot_treemap_from_activity_cols(filtered)
 
-        st.markdown("### Répartition par Type (Daily)")
-        plot_stacked_by_type(filtered)
+    # ====== Utilisation dans l'app ======
+    report_md = build_training_report(filtered)
+    st.markdown(report_md)
+    
+        # --- Partie 2 : Question personnalisée ---
+# --- Partie 2 : Question personnalisée ---
+# --- Partie 2 : Question personnalisée ---
+    st.markdown("### ❓ Poser une question personnalisée (LLM open-source)")
+    
+    user_q = st.text_area(
+        "Votre question en français :",
+        placeholder="Exemple : Quels sont les points de divergence entre Marcelo et Mathieu ?"
+    )
+    
+    if st.button("Poser la question à l'IA (Ollama)"):
+        if not user_q.strip():
+            st.warning("Veuillez saisir une question.")
+        else:
+            prompt = f"""
+Tu es un facilitateur de réunion de staff en football professionnel.
+Voici le rapport de séance :
 
-        st.markdown("### Contenus par date (Daily)")
-        plot_scatter_date_content(filtered)
+{report_md}
+
+Question de l'utilisateur :
+{user_q}
+
+Réponds en français, de manière claire, concise et structurée, en citant les coachs/critères pertinents.
+"""
+
+            try:
+                resp = ollama.chat(
+                    model="llama3.1",  # ⚠️ Assure-toi d'avoir fait `ollama pull llama3.1`
+                    messages=[
+                        {"role": "system", "content": "Tu aides à l'analyse et la mise en valeur des retours d'entraînement."},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                answer = resp["message"]["content"].strip()
+                st.markdown("### 💡 Réponse de l'IA")
+                st.markdown(answer)
+
+            except Exception as e:
+                st.error(f"Erreur Ollama : {e}\n⚠️ Vérifie que Ollama est installé et lancé (`ollama serve`).")
 
 
+# Choix de la page
 if page == "Analyse entrainement":
     render_entrainement()
 else:
     render_daily()
+
