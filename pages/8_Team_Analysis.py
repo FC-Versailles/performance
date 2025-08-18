@@ -172,6 +172,40 @@ df2 = fetch_google_sheet(SPREADSHEET_ID_2, RANGE_2)
 ########################################################################################################
 ########################################################################################################
 
+# --- Ensure col14 is numeric ---
+df["col14"] = pd.to_numeric(df["col14"], errors="coerce")
+
+# 1. Number of days played (non-null values)
+num_days = df["col14"].notna().sum()
+
+# 2. Last points (last valid value)
+last_points = df["col14"].dropna().iloc[-1] if num_days > 0 else 0
+
+# 3. Calculations
+pct_objective = (last_points / 34) * 100
+pct_played = (num_days / 32) * 100
+
+# --- Déterminer l'emoji ---
+if pct_objective < 0.1 * pct_played:
+    emoji = "🔴"
+elif pct_objective == 0:
+    emoji = "🟠"
+else:
+    emoji = "🟢"
+
+st.markdown("### 🔋 Work in progress")
+
+st.markdown(
+    f"""
+    <div style="font-size:24px; font-weight:bold; color:#0031E3; font-family:Arial Black;">
+        {emoji} % de l'objectif atteint : {pct_objective:.1f}%  
+        | % du championnat joué : {pct_played:.1f}%
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
 # Données
 x_values = list(range(1, len(df) + 1))
 green      = "#00FF00"
@@ -248,7 +282,7 @@ fig.update_layout(
     title=dict(
         text="Route vers le top 8 | 44 pts",
         x=0.02, xanchor="left",
-        font=dict(size=20, color="#0031E3", family="Arial Black")
+        font=dict(size=16, color="#0031E3", family="Arial Black")
     ),
     xaxis=dict(
         title=dict(text="Matchs",
