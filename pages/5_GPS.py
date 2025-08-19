@@ -1009,7 +1009,7 @@ elif page == "Entrainement":
     
     col_low, col_high = st.columns(2)
     with col_low:
-        st.markdown("#### Performances basses — complément nécessaire")
+        st.markdown("#### Performances basses")
         for metric in charge_metrics:
             res = bullet_names(display, metric, "low")
             if res:  # n'affiche que si non vide
@@ -1017,7 +1017,7 @@ elif page == "Entrainement":
                 st.markdown(res)
     
     with col_high:
-        st.markdown("#### Performances élevées — vigilance")
+        st.markdown("#### Performances élevées")
         for metric in charge_metrics:
             res = bullet_names(display, metric, "high")
             if res:
