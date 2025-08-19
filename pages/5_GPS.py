@@ -86,7 +86,7 @@ def fetch_google_sheet(spreadsheet_id, sheet_name):
     header = rows[0]
     return pd.DataFrame(rows[1:], columns=header)
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def load_data():
     creds = get_credentials()
     service = build('sheets', 'v4', credentials=creds)
@@ -180,13 +180,14 @@ player_positions = {
     "OUCHEN":     "M",
     "RENAUD":     "M",
     "SANTINI":    "PIS",
-    "TCHATO":     "PIS",
+    "TCHATO":     "DC",
     "ZEMOURA":    "ATT",
     "BASQUE":     "M",
     "KOUASSI":    "M",
     "ODZOUMO":    "ATT",
     "TRAORE":     "M",
-    "KOFFI":      "ATT"
+    "KOFFI":      "ATT",
+    "TLILI":      "ATT"
 }
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
@@ -400,10 +401,10 @@ elif page == "Entrainement":
             Refmatch[c] = Refmatch[c].round(0).astype("Int64")
 
     # ========== Entrainement Block ==========
-    st.markdown("### 🎯 Entraînement")
+    st.markdown("### Entraînement")
     allowed_tasks = [
         "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
-        "OPTI +", "OPTI J-1", "MICRO"
+        "OPTI +", "OPTI J-1", "MICRO", "DEV INDIV"
     ]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     valid_dates = train_data["Date"].dropna()
@@ -662,6 +663,7 @@ elif page == "Entrainement":
             return ""
     styled = styled.applymap(rpe_color, subset=["RPE"])
     
+    import re
     html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
     
     total_rows = df_sorted.shape[0] + 1
@@ -702,149 +704,153 @@ elif page == "Entrainement":
     </html>
     """
     
-    components.html(
-        html_template,
-        height=iframe_height,
-        width=1500,     # suffisamment large pour déclencher le scroll horizontal
-        scrolling=True  # active les scrollbars
-    )
+    # components.html(
+    #     html_template,
+    #     height=iframe_height,
+    #     width=1500,     # suffisamment large pour déclencher le scroll horizontal
+    #     scrolling=True  # active les scrollbars
+    # )
+    safe = re.sub(r'</div>\s*</body>\s*</html>\s*$', '</div>', html_template, flags=re.I)
+    st.markdown(safe, unsafe_allow_html=True)
 
-    # ── Export PDF with same colored table fit to A4 landscape ───────────────
-    if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
-        obj = objectives.get("Duration", None) 
-        buf = io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
-                                rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
-        styles = getSampleStyleSheet()
-        normal = styles["Normal"]
+    #st.markdown(html_template, unsafe_allow_html=True)
+    
+    # # ── Export PDF with same colored table fit to A4 landscape ───────────────
+    # if PDF_ENABLED and st.button("📥 Télécharger le rapport PDF"):
+    #     obj = objectives.get("Duration", None) 
+    #     buf = io.BytesIO()
+    #     doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+    #                             rightMargin=2, leftMargin=2, topMargin=5, bottomMargin=2)
+    #     styles = getSampleStyleSheet()
+    #     normal = styles["Normal"]
 
-        # Header
-        hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
-        resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
-        logo = Image(io.BytesIO(resp.content), width=40, height=40)
-        hdr_data = [
-            Paragraph("<b>Données GPS - Séance du :</b>", hdr_style),
-            Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
-            logo
-        ]
-        hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
-        hdr_tbl.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-            ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-            ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
-        ]))
+    #     # Header
+    #     hdr_style = ParagraphStyle('hdr', parent=normal, fontSize=12, leading=14, textColor=HexColor('#0031E3'))
+    #     resp = requests.get("https://raw.githubusercontent.com/FC-Versailles/wellness/main/logo.png")
+    #     logo = Image(io.BytesIO(resp.content), width=40, height=40)
+    #     hdr_data = [
+    #         Paragraph("<b>Données GPS - Séance du :</b>", hdr_style),
+    #         Paragraph(sel_date.strftime("%d.%m.%Y"), hdr_style),
+    #         logo
+    #     ]
+    #     hdr_tbl = Table([hdr_data], colWidths=[doc.width/3]*3)
+    #     hdr_tbl.setStyle(TableStyle([
+    #         ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+    #         ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+    #         ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
+    #         ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
+    #     ]))
 
-        # Build PDF table data
-        data_pdf = [list(df_display.columns)]
-        for _, row in df_display.iterrows():
-            vals = []
-            for c in df_display.columns:
-                val = row[c]
-                if isinstance(val, float) and c == 'Vmax':
-                    vals.append(f"{val:.1f}")
-                elif isinstance(val, float) and c.endswith('%'):
-                    vals.append(f"{val:.1f} %")
-                elif isinstance(val, (int, np.integer)):
-                    vals.append(f"{val:d}")
-                elif pd.isna(val):
-                    vals.append("")
-                else:
-                    vals.append(str(val))
-            data_pdf.append(vals)
+    #     # Build PDF table data
+    #     data_pdf = [list(df_display.columns)]
+    #     for _, row in df_display.iterrows():
+    #         vals = []
+    #         for c in df_display.columns:
+    #             val = row[c]
+    #             if isinstance(val, float) and c == 'Vmax':
+    #                 vals.append(f"{val:.1f}")
+    #             elif isinstance(val, float) and c.endswith('%'):
+    #                 vals.append(f"{val:.1f} %")
+    #             elif isinstance(val, (int, np.integer)):
+    #                 vals.append(f"{val:d}")
+    #             elif pd.isna(val):
+    #                 vals.append("")
+    #             else:
+    #                 vals.append(str(val))
+    #         data_pdf.append(vals)
 
-        # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
-        cell_styles = []
-        nrows = len(data_pdf)
-        ncols = len(data_pdf[0])
-        for row_idx in range(1, nrows):  # skip header
-            row = df_display.iloc[row_idx - 1]
-            for col_idx, col in enumerate(df_display.columns):
-                cell_color = None
-                cell_text_color = None
+    #     # Build the cell color matrix, mimicking your Streamlit color logic (but does NOT touch Streamlit table)
+    #     cell_styles = []
+    #     nrows = len(data_pdf)
+    #     ncols = len(data_pdf[0])
+    #     for row_idx in range(1, nrows):  # skip header
+    #         row = df_display.iloc[row_idx - 1]
+    #         for col_idx, col in enumerate(df_display.columns):
+    #             cell_color = None
+    #             cell_text_color = None
         
-                # ---------- PRIORITÉ : RPE couleur ----------
-                if col == "RPE" and pd.notna(row["RPE"]):
-                    val = float(row["RPE"])
-                    norm = (val - 1) / (10 - 1)
-                    norm = min(max(norm, 0), 1)
-                    color = mcolors.rgb2hex(cmap(norm))
-                    cell_color = color
-                    cell_text_color = "#000000"
+    #             # ---------- PRIORITÉ : RPE couleur ----------
+    #             if col == "RPE" and pd.notna(row["RPE"]):
+    #                 val = float(row["RPE"])
+    #                 norm = (val - 1) / (10 - 1)
+    #                 norm = min(max(norm, 0), 1)
+    #                 color = mcolors.rgb2hex(cmap(norm))
+    #                 cell_color = color
+    #                 cell_text_color = "#000000"
         
-                # ---------- Moyenne (SURCHARGE) ----------
-                elif row['Name'] == 'Moyenne':
-                    cell_color = '#EDE8E8'
-                    cell_text_color = '#0031E3'
+    #             # ---------- Moyenne (SURCHARGE) ----------
+    #             elif row['Name'] == 'Moyenne':
+    #                 cell_color = '#EDE8E8'
+    #                 cell_text_color = '#0031E3'
         
-                elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
-                    cell_color = '#CFB013'
-                    cell_text_color = '#000000'
+    #             elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+    #                 cell_color = '#CFB013'
+    #                 cell_text_color = '#000000'
         
-                # ---------- % columns (objective coloring) ----------
-                elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
-                    stat = col.replace(' %', '')
-                    val = row[col]
-                    obj = objectives.get(stat, None)
-                    if pd.notna(val) and obj is not None:
-                        d = abs(val - obj)
-                        if d <= 5:
-                            cell_color = '#c8e6c9'
-                        elif d <= 10:
-                            cell_color = '#fff9c4'
-                        elif d <= 15:
-                            cell_color = '#ffe0b2'
-                        else:
-                            cell_color = '#ffcdd2'
+    #             # ---------- % columns (objective coloring) ----------
+    #             elif col.endswith('%') and not row['Name'].startswith('Moyenne'):
+    #                 stat = col.replace(' %', '')
+    #                 val = row[col]
+    #                 obj = objectives.get(stat, None)
+    #                 if pd.notna(val) and obj is not None:
+    #                     d = abs(val - obj)
+    #                     if d <= 5:
+    #                         cell_color = '#c8e6c9'
+    #                     elif d <= 10:
+    #                         cell_color = '#fff9c4'
+    #                     elif d <= 15:
+    #                         cell_color = '#ffe0b2'
+    #                     else:
+    #                         cell_color = '#ffcdd2'
         
-                # ---------- Alternance pour tout le reste ----------
-                if cell_color is None:
-                    cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
-                # PDF style
-                try:
-                    cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
-                except:
-                    pass
-                if cell_text_color:
-                    try:
-                        cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_text_color)))
-                    except:
-                        pass
-                elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
-                    cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
+    #             # ---------- Alternance pour tout le reste ----------
+    #             if cell_color is None:
+    #                 cell_color = '#EDE8E8' if (row_idx - 1) % 2 == 0 else 'white'
+    #             # PDF style
+    #             try:
+    #                 cell_styles.append(('BACKGROUND', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_color)))
+    #             except:
+    #                 pass
+    #             if cell_text_color:
+    #                 try:
+    #                     cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), HexColor(cell_text_color)))
+    #                 except:
+    #                     pass
+    #             elif row['Name'].startswith('Moyenne ') and row['Name'] != 'Moyenne':
+    #                 cell_styles.append(('TEXTCOLOR', (col_idx, row_idx), (col_idx, row_idx), colors.black))
 
 
 
-        # Header row style
-        cell_styles += [
-            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#0031E3')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold')
-        ]
+    #     # Header row style
+    #     cell_styles += [
+    #         ('BACKGROUND', (0, 0), (-1, 0), HexColor('#0031E3')),
+    #         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+    #         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold')
+    #     ]
         
-        base_styles = [
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 0), (-1, 0), 4),
-            ('FONTSIZE', (0, 1), (-1, -1), 6),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 2),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ]
+    #     base_styles = [
+    #         ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),
+    #         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+    #         ('FONTSIZE', (0, 0), (-1, 0), 4),
+    #         ('FONTSIZE', (0, 1), (-1, -1), 6),
+    #         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    #         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    #         ('LEFTPADDING', (0, 0), (-1, -1), 2),
+    #         ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+    #         ('TOPPADDING', (0, 0), (-1, -1), 2),
+    #         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+    #     ]
         
-        pdf_tbl = Table(data_pdf, colWidths=[doc.width / ncols] * ncols, repeatRows=1)
-        pdf_tbl.hAlign = 'CENTER'
-        pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
+    #     pdf_tbl = Table(data_pdf, colWidths=[doc.width / ncols] * ncols, repeatRows=1)
+    #     pdf_tbl.hAlign = 'CENTER'
+    #     pdf_tbl.setStyle(TableStyle(base_styles + cell_styles))
         
-        elements = [hdr_tbl, Spacer(1, 8), pdf_tbl]
-        doc.build(elements)
-        st.download_button(
-            label="📥 Télécharger le PDF", data=buf.getvalue(),
-            file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
-        )
+    #     elements = [hdr_tbl, Spacer(1, 8), pdf_tbl]
+    #     doc.build(elements)
+    #     st.download_button(
+    #         label="📥 Télécharger le PDF", data=buf.getvalue(),
+    #         file_name=f"Entrainement_{sel_date.strftime('%Y%m%d')}.pdf", mime="application/pdf"
+    #    )
                                                                      
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
     
@@ -853,7 +859,7 @@ elif page == "Entrainement":
     
         
     # === CHARGE DU JOUR : z-score vs moyenne par position (fallback global) ===
-    st.markdown("### ⚖️ Charge du jour")
+    st.markdown("### 🎯 Charge du jour")
     
     charge_metrics = ["Distance", "Distance 15km/h", "Distance 20-25km/h", "Distance 25km/h"]
     
@@ -974,34 +980,80 @@ elif page == "Entrainement":
     height = min(1000, 40 * n_rows)    # limite à 1000px max
     width  = min(1600, 200 * n_cols)   # ~200px par colonne, cap à 1600px
     
-    html = f"""
-    <html>
-      <head>
-        <style>
-          .centered-table {{
-            border-collapse: collapse;
-            border-spacing: 1;
-            width:120%;
-            margin:2;
-          }}
-          .centered-table th, .centered-table td {{
-            padding:6px;
-            text-align:center;
-            border:1px solid #ddd;
-          }}
-          .centered-table th{{ background-color:#0031E3; color:white; }}
-          body {{ margin:1; padding:1; }}
-        </style>
-      </head>
-      <body>
-        {styled.hide(axis="index").to_html()}
-      </body>
-    </html>
-    """
-    components.html(html, height=height, width=width, scrolling=True)
+    # --- 6. Listes par métrique (au lieu du tableau coloré) ----------------------
+    LOW_THR  = -1.20   # z-score < 1.20
+    HIGH_THR = 1.50   # z-score > 1.50
+    
+    def bullet_names(df, metric, op):
+        if metric not in df.columns:
+            return None
+        m = df[metric].dropna()
+        if m.empty:
+            return None
+        
+        if op == "low":
+            mask = (df[metric] < LOW_THR)
+            sub = df.loc[mask & df[metric].notna(), ["Name", metric]]
+            sub = sub.sort_values(metric, ascending=True)
+        else:
+            mask = (df[metric] > HIGH_THR)
+            sub = df.loc[mask & df[metric].notna(), ["Name", metric]]
+            sub = sub.sort_values(metric, ascending=False)
+        
+        if sub.empty:
+            return None
+        
+        lines = [f"• {row['Name']} ({row[metric]:.2f})" for _, row in sub.iterrows()]
+        return "\n".join(lines)
+    
+    
+    col_low, col_high = st.columns(2)
+    with col_low:
+        st.markdown("#### Performances basses — complément nécessaire")
+        for metric in charge_metrics:
+            res = bullet_names(display, metric, "low")
+            if res:  # n'affiche que si non vide
+                st.markdown(f"**{metric}**")
+                st.markdown(res)
+    
+    with col_high:
+        st.markdown("#### Performances élevées — vigilance")
+        for metric in charge_metrics:
+            res = bullet_names(display, metric, "high")
+            if res:
+                st.markdown(f"**{metric}**")
+                st.markdown(res)
+
+       
+    
+    # html = f"""
+    # <html>
+    #   <head>
+    #     <style>
+    #       .centered-table {{
+    #         border-collapse: collapse;
+    #         border-spacing: 1;
+    #         width:120%;
+    #         margin:2;
+    #       }}
+    #       .centered-table th, .centered-table td {{
+    #         padding:6px;
+    #         text-align:center;
+    #         border:1px solid #ddd;
+    #       }}
+    #       .centered-table th{{ background-color:#0031E3; color:white; }}
+    #       body {{ margin:1; padding:1; }}
+    #     </style>
+    #   </head>
+    #   <body>
+    #     {styled.hide(axis="index").to_html()}
+    #   </body>
+    # </html>
+    # """
+    # components.html(html, height=height, width=width, scrolling=True)
 
         
-    st.markdown("#### 📊 Analyse Semaine")
+    st.markdown("### 📊 Analyse Semaine")
 
     # Use different allowed_tasks for weekly analysis
     allowed_tasks_week = [
@@ -1120,47 +1172,23 @@ elif page == "Entrainement":
     row_height = 28
     iframe_height = header_height + total_rows * row_height
     
-    html_template = f"""
+    wrapper = f"""
     <html>
       <head>
         <style>
-          .centered-table {{
-            border-collapse: collapse;
-            min-width: 1200px;          /* force une largeur minimale */
-            white-space: nowrap;        /* empêche le retour à la ligne */
-            font-size: 11.5px;             /* texte plus petit */
-          }}
-          .centered-table th, .centered-table td {{
-            text-align: center;
-            padding: 2px 4px;           /* padding réduit */
-            border: 1px solid #ddd;
-          }}
-          .centered-table th {{
-            background-color: #0031E3;
-            color: white;
-          }}
+          body {{ margin:0; padding:0; }}   /* supprime les marges autour */
+          .centered-table{{border-collapse:collapse;width:100%;}}
+          .centered-table th {{font-size:10px; padding:6px 8px; text-align:center;}}
+          .centered-table td {{font-size:10px; padding:4px 6px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
+          .centered-table th, .centered-table td {{border:1px solid #ddd;}}
+          .centered-table th{{background-color:#0031E3;color:white;}}
         </style>
       </head>
-      <body>
-        <div style="
-             max-height: {iframe_height}px;
-             overflow-y: auto;
-             overflow-x: auto;
-          ">
-          {html_obj}
-        </div>
-      </body>
+      <body>{html_obj}</body>
     </html>
     """
-    
-    components.html(
-        html_template,
-        height=iframe_height,
-        width=1500,     # suffisamment large pour déclencher le scroll horizontal
-        scrolling=True  # active les scrollbars
-    )
-
-    st.markdown("#### 📊 Analyse collective")
+    st.markdown(wrapper, unsafe_allow_html=True)
+    st.markdown("#### 📈 Analyse collective")
     
     # --- Filtres principaux partagés ---
     col1, col2 = st.columns(2)
@@ -2136,3 +2164,129 @@ elif page == "Joueurs":
         st.plotly_chart(fig4, use_container_width=True)
     else:
         st.info("Pas de données Distance ou Distance 15km/h pour ce joueur.")
+        
+        
+elif page == "Minutes de jeu":
+    st.subheader("⏱️ Minutes de jeu")
+
+    df = data.copy()
+
+    player_col = "Name"
+    minutes_col = "Duration"
+    type_col    = "Type"
+    jours_col   = "Jour"   # vérifie si c'est bien Jour
+    date_col    = "Date"
+
+    # nettoyage
+    df[minutes_col] = pd.to_numeric(df[minutes_col], errors="coerce")
+    df[type_col] = df[type_col].astype(str).str.upper().str.strip()
+    df[jours_col] = df[jours_col].astype(str)
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+    # filtre
+    mask = (
+        df[type_col].eq("GAME")
+        & ~df[jours_col].str.lower().eq("prepa")
+        & df[minutes_col].notna()
+    )
+    dg = df.loc[mask].copy()
+    if dg.empty:
+        st.info("Pas de GAME avec Jour != 'prepa'.")
+        st.stop()
+
+    # bar chart
+    tot = (
+        dg.groupby(player_col, as_index=False)[minutes_col]
+          .sum()
+          .sort_values(minutes_col, ascending=False)
+    )
+    fig_bar = px.bar(
+        tot,
+        x=player_col,
+        y=minutes_col,
+        title="Minutes cumulées par joueur",
+        text=minutes_col,
+        color_discrete_sequence=["#0031E3"]
+    )
+    fig_bar.update_traces(textposition="outside", cliponaxis=False)
+    fig_bar.update_layout(xaxis_title=None, yaxis_title="Minutes")
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+     # ---- SCATTER: total vs 3 derniers (avec labels auto-ajustés + flèches) ----
+    ordered = dg.sort_values([player_col, date_col])
+    last3 = (
+        ordered.groupby(player_col, group_keys=False)
+               .apply(lambda x: x.tail(3)[minutes_col].sum())
+               .rename("last3_min")
+    )
+    total = tot.set_index(player_col)[minutes_col].rename("total_min")
+    
+    scat_df = (
+        pd.concat([total, last3], axis=1)
+          .reset_index()
+          .fillna(0)
+          .rename(columns={player_col: "player"})
+    )
+    
+    # Base scatter: points bleu FCV
+    fig_sc = go.Figure()
+    fig_sc.add_trace(go.Scatter(
+        x=scat_df["total_min"],
+        y=scat_df["last3_min"],
+        mode="markers",
+        marker=dict(size=10, color="#0031E3"),
+        hovertext=scat_df["player"],
+        hoverinfo="text+x+y",
+        showlegend=False
+    ))
+    
+    fig_sc.update_layout(
+        title="Minutes: total saison vs 3 derniers matchs",
+        xaxis_title="Total minutes (saison)",
+        yaxis_title="Minutes des 3 derniers matchs"
+    )
+    
+    # ---- Placement anti-chevauchement simple par offsets alternés ----
+    # On attribue des offsets différents aux points proches pour éviter la superposition.
+    # Palette d'offsets (pixels) que l'on fait tourner si conflit détecté.
+    offsets = [(0,-24),(0,24),(26,0),(-26,0),(30,-30),(-30,30),(34,-18),(-34,18)]
+    used_positions = []  # mémorise boîtes approx pour limiter chevauchement
+    
+    # Seuil de proximité en unités données (dépend de l'échelle du graphique)
+    x_range = max(scat_df["total_min"].max() - scat_df["total_min"].min(), 1)
+    y_range = max(scat_df["last3_min"].max() - scat_df["last3_min"].min(), 1)
+    tol_x = 0.03 * x_range
+    tol_y = 0.05 * y_range
+    
+    def is_close(x, y, boxes):
+        for (bx, by) in boxes:
+            if abs(x - bx) <= tol_x and abs(y - by) <= tol_y:
+                return True
+        return False
+    
+    # Trie par y puis x pour un placement stable
+    rows = scat_df.sort_values(["last3_min","total_min"]).to_dict("records")
+    
+    k = 0
+    for r in rows:
+        x = r["total_min"]
+        y = r["last3_min"]
+        # si proche d'un label déjà placé, on change d'offset
+        if is_close(x, y, used_positions):
+            k += 1
+        ax, ay = offsets[k % len(offsets)]
+        used_positions.append((x, y))
+    
+        fig_sc.add_annotation(
+            x=x, y=y,
+            text=r["player"],
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=1.2,
+            arrowcolor="#0031E3",
+            ax=ax, ay=ay,  # offset en pixels
+            font=dict(color="#0031E3")
+        )
+    
+    st.plotly_chart(fig_sc, use_container_width=True)
