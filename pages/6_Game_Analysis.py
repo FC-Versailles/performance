@@ -22,7 +22,7 @@ from scipy.ndimage import gaussian_filter1d
 from highlight_text import fig_text
 
 
-st.set_page_config(layout='wide')
+
 col1, col2 = st.columns([9,1])
 with col1:
     st.title("Game Analysis | FC Versailles")
