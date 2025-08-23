@@ -2,29 +2,28 @@
 # -*- coding: utf-8 -*-
 """
 Game Analysis | FC Versailles
+Auto-updates: cache TTL + dynamic season lookup.
 """
 
 import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter1d
 import streamlit as st
+from scipy.ndimage import gaussian_filter1d
+from statsbombpy import sb
 
-# Optional dependency; guard import for cloud
+# Optional dependency; guard import
 try:
     from highlight_text import fig_text
 except Exception:
     fig_text = None
-
-from statsbombpy import sb
 
 # =======================
 # ---- CONSTANTS --------
 # =======================
 FOCUS_TEAM = "Versailles"
 COMP_ID = 129
-SEASON_ID = 318
 
 BGCOLOR = "white"
 FOCUS_COLOR = "#0031E3"
@@ -45,12 +44,21 @@ with col2:
         use_container_width=True,
     )
 st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
-st.caption("Filtre adversaire + date. Si les événements ne sont pas publiés, le match apparaît mais le rapport est bloqué.")
+st.caption("Adversaire + date. Les nouveaux matchs apparaissent automatiquement quand l’API se met à jour.")
 
 # =======================
 # ---- HELPERS ----------
 # =======================
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
+def latest_season_id(comp_id: int, creds: dict) -> int:
+    comps = sb.competitions(creds=creds)
+    x = comps[comps["competition_id"] == comp_id].copy()
+    if x.empty:
+        return 318  # fallback
+    # take the most recent season_id
+    return int(x["season_id"].max())
+
+@st.cache_data(ttl=180, show_spinner=False)
 def load_matches(comp_id: int, season_id: int, creds: dict) -> pd.DataFrame:
     m = sb.matches(competition_id=comp_id, season_id=season_id, creds=creds)
     if m.empty:
@@ -76,8 +84,7 @@ def load_matches(comp_id: int, season_id: int, creds: dict) -> pd.DataFrame:
     m = m.sort_values(by=["match_date", "match_id"], ascending=[False, False]).reset_index(drop=True)
     return m
 
-
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def load_events(match_id: int, creds: dict) -> pd.DataFrame:
     ev = sb.events(match_id=match_id, creds=creds)
     if ev.empty:
@@ -87,11 +94,9 @@ def load_events(match_id: int, creds: dict) -> pd.DataFrame:
             ev[c] = pd.to_numeric(ev[c], errors="coerce")
     return ev
 
-
 def group_to_5min(minute_series: pd.Series) -> pd.Series:
     x = pd.to_numeric(minute_series, errors="coerce").fillna(0)
     return ((x // 5) + 1) * 5
-
 
 def game_flow_ax(data: pd.DataFrame, period: int, ax, focus_team: str, opposition: str):
     df = data[data["period"] == period].copy()
@@ -137,7 +142,7 @@ def game_flow_ax(data: pd.DataFrame, period: int, ax, focus_team: str, oppositio
             obv_diff = (teamOBV_list - oppoOBV_list) * 50  # scale for visual
             total_net_obv = float(teamOBV_list.sum() - oppoOBV_list.sum())
 
-    # Goals markers
+    # Goals
     team_goals = df[
         ((df["team"] == focus_team) & (df["shot_outcome"] == "Goal"))
         | ((df["type"] == "Own Goal For") & (df["team"] == focus_team))
@@ -174,7 +179,6 @@ def game_flow_ax(data: pd.DataFrame, period: int, ax, focus_team: str, oppositio
 
     return total_net_obv
 
-
 def plot_xg_cumulative(data: pd.DataFrame, team_name: str, oppo_name: str,
                        focus_color: str, oppo_color: str):
     events_shots = data[data["type"] == "Shot"].copy()
@@ -199,7 +203,6 @@ def plot_xg_cumulative(data: pd.DataFrame, team_name: str, oppo_name: str,
     ax.stairs(values=xg_team, edges=min_team, linewidth=5, label=team_name, color=focus_color)
     ax.stairs(values=xg_oppo, edges=min_oppo, linewidth=5, label=oppo_name, color=oppo_color)
 
-    # Target lines
     ax.axhline(y=1.69, xmin=0.0, xmax=1.0, linewidth=2, color=focus_color, ls="--")
     if fig_text:
         fig_text(0.13, 0.61, "Target occasion créée", color=focus_color, fontweight="bold", fontsize=12, backgroundcolor="0.85")
@@ -225,37 +228,23 @@ def plot_xg_cumulative(data: pd.DataFrame, team_name: str, oppo_name: str,
     ax.legend(frameon=True, loc="upper right")
     st.pyplot(fig, use_container_width=True)
 
-
 # =======================
 # ------- UI ------------
 # =======================
-with st.sidebar:
-    if st.button("🔄 Refresh data"):
-        st.cache_data.clear()
-        st.experimental_rerun()
+season_id = latest_season_id(COMP_ID, CREDS)
+matches = load_matches(COMP_ID, season_id, CREDS)
 
-matches = load_matches(COMP_ID, SEASON_ID, CREDS)
+# Fallback to previous season if needed
 if matches.empty:
-    # Auto-try next season if data moved
-    fallback = load_matches(COMP_ID, SEASON_ID + 1, CREDS)
-    matches = fallback
+    prev_season = max(season_id - 1, 0)
+    matches = load_matches(COMP_ID, prev_season, CREDS)
 
 if matches.empty:
-    st.error("Aucun match trouvé pour Versailles sur la saison sélectionnée.")
+    st.error("Aucun match trouvé pour Versailles.")
     st.stop()
 
 with st.sidebar:
     st.header("Filtres")
-    show_pending = st.checkbox("Inclure les matchs sans événements (pré-match / live)", value=True)
-
-if not show_pending:
-    matches = matches[matches["has_events"]]
-
-if matches.empty:
-    st.info("Aucun match avec les filtres actuels.")
-    st.stop()
-
-with st.sidebar:
     opponents = sorted(matches["opponent"].unique().tolist())
     sel_oppo = st.selectbox("Adversaire", opponents, index=0)
 
@@ -270,16 +259,11 @@ if m_pick.empty:
     st.warning("Aucun match pour cet adversaire et cette date.")
     st.stop()
 
-if len(m_pick) > 1:
-    labels = [f"{r['label']}  (id={r['match_id']})" for _, r in m_pick.iterrows()]
-    with st.sidebar:
-        chosen_label = st.selectbox("Sélectionnez le match exact", labels, index=0)
-    match_id = int(chosen_label.split("id=")[-1].strip(")"))
-    match_row = m_pick[m_pick["match_id"] == match_id].iloc[0]
-else:
-    match_row = m_pick.iloc[0]
-    match_id = int(match_row["match_id"])
+# If several matches same day, prefer the one with events; else first row
+m_pick = m_pick.sort_values(["has_events", "match_id"], ascending=[False, False]).reset_index(drop=True)
+match_row = m_pick.iloc[0]
 
+match_id = int(match_row["match_id"])
 home_team = match_row["home_team"]
 away_team = match_row["away_team"]
 home_score = int(match_row.get("home_score", 0) or 0)
@@ -291,13 +275,13 @@ has_events = bool(match_row.get("has_events", False))
 # Header
 title_col1, title_col2 = st.columns([3, 1])
 with title_col1:
-    st.subheader(f"{home_team} {home_score}–{away_score} {away_team} • {sel_date.strftime('%Y-%m-%d')}  • {status}")
+    st.subheader(f"{home_team} {home_score}–{away_score} {away_team} • {sel_date.strftime('%Y-%m-%d')} • {status}")
 with title_col2:
     st.metric("Match ID", match_id)
 
-# If events not yet available, block plots cleanly
+# If events not yet available, stop cleanly
 if not has_events:
-    st.info("Rapport indisponible: événements non publiés pour ce match. Réessayez après publication.")
+    st.info("Rapport indisponible: événements non publiés pour ce match. La page se mettra à jour automatiquement quand l’API changera (TTL ~3 minutes).")
     st.stop()
 
 # =======================
@@ -305,7 +289,7 @@ if not has_events:
 # =======================
 events = load_events(match_id, CREDS)
 if events.empty:
-    st.info("Aucun événement retourné par l’API pour ce match.")
+    st.info("Aucun événement retourné par l’API pour ce match pour le moment.")
     st.stop()
 
 # =======================
@@ -316,12 +300,12 @@ fig.set_facecolor(BGCOLOR)
 gs = fig.add_gridspec(nrows=1, ncols=2, wspace=0.15)
 
 ax1 = fig.add_subplot(gs[0])
-total_net_obv_1 = game_flow_ax(events, 1, ax1, FOCUS_TEAM, opposition)
+_ = game_flow_ax(events, 1, ax1, FOCUS_TEAM, opposition)
 ax1.set_ylabel("1ère mi-temps", fontsize=14, color="black")
 ax1.legend(fontsize=10, loc="upper right")
 
 ax2 = fig.add_subplot(gs[1])
-total_net_obv_2 = game_flow_ax(events, 2, ax2, FOCUS_TEAM, opposition)
+_ = game_flow_ax(events, 2, ax2, FOCUS_TEAM, opposition)
 ax2.set_ylabel("2ème mi-temps", fontsize=14, color="black")
 ax2.legend(fontsize=10, loc="upper right")
 
@@ -346,10 +330,9 @@ plot_xg_cumulative(
 with st.expander("Notes techniques"):
     st.markdown(
         """
-- Possession = proxy par passes complétées (bins 5’, lissage gaussien).
-- Danger (OBV) = différentiel de `obv_total_net` Pass/Carry/Dribble.
-- xG cumulés = escaliers par équipe + lignes cibles 1.69 / 1.07.
-- Cache activé sur matches et events. Bouton Refresh pour forcer la MAJ.
-- Affichage des matchs non disponibles pour anticiper la publication.
+- Pas de bouton de rafraîchissement. Mise à jour automatique via TTL.
+- `latest_season_id()` détecte la saison active du comp 129.
+- `load_matches` conserve tous les statuts. `has_events` ≙ rapport prêt.
+- TTL: 180s pour matches et events, 3600s pour competitions.
         """
     )
