@@ -1059,7 +1059,7 @@ elif page == "Entrainement":
     allowed_tasks_week = [
         "WU + GAME + COMP", 
         "WU + GAME","OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
-        "OPTI +", "OPTI J-1", "MICRO","COMPENSATION","AUTRES"
+        "OPTI +", "OPTI J-1", "MICRO","COMPENSATION","AUTRES", "DEV INDIV"
     ]
     
     
