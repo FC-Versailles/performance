@@ -20,3 +20,4 @@ adjustText
 xlsxwriter
 highlight-text
 ollama
+mplsoccer
