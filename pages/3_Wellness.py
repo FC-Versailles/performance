@@ -137,7 +137,7 @@ if page == "Pre-entrainement":
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
         "Fischer", "Kalai","Koffi","M'bone",  "Barbet",
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
-        "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili"
+        "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili","Barbet"
      
     ]
 
@@ -564,7 +564,7 @@ elif page == "Post-entrainement":
              "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
              "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
              "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
-             "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili"
+             "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili","Barbet"
           
         ]
 
@@ -659,7 +659,7 @@ elif page == "Joueurs":
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
         "Fischer", "Kalai","Koffi","M'bone", "Barbet",
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
-        "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili"
+        "Santini","Zemoura","Tchato","Ouchen","Traoré","Tlili","Barbet"
     ]
     available_players = sorted([p for p in all_players if p in data['Nom'].unique()])
     selected_name = st.selectbox("Choisir un nom:", options=available_players)
