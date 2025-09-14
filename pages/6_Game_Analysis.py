@@ -14,11 +14,12 @@ import matplotlib.pyplot as plt
 import streamlit as st
 from scipy.ndimage import gaussian_filter1d
 from statsbombpy import sb
-from scipy.ndimage import gaussian_filter
+from scipy.stats import gaussian_kde
 
 # Optionnel: mplsoccer pour les tracés joueurs
 from mplsoccer import VerticalPitch
 from mplsoccer import Pitch
+
 
 # ---------- Paramètres ----------
 st.set_page_config(layout="wide")
@@ -278,95 +279,64 @@ def plot_shot_map_combined(events: pd.DataFrame, team1: str, team2: str):
     st.pyplot(fig, use_container_width=True)
 
 
-def plot_obv_zones(events, team_name, oppo_name, bins_x=12, bins_y=8,
-                   min_actions=6, smooth_sigma=0.0, vlim_pct=98, mode="diff"):
-    """
-    mode: 'diff' (team - opp) | 'for' | 'against' | 'per_action'
-    """
+
+def plot_obv_kde(events: pd.DataFrame, team_name: str, bw: float = 0.3):
     if "obv_total_net" not in events.columns:
-        st.info("OBV non disponible.")
+        st.info("OBV column not available.")
         return
 
-    ev = events[events["type"].isin(["Pass","Carry","Dribble"])].copy()
+    df = events[
+        (events["team"] == team_name)
+        & (events["type"].isin(["Pass", "Carry"]))   # <-- filter here
+    ].copy()
 
-    def _end_xy(r):
-        if r["type"] == "Pass":  p = r.get("pass_end_location")
-        elif r["type"] == "Carry": p = r.get("carry_end_location")
-        else: p = r.get("location")
-        return (p[0], p[1]) if isinstance(p, (list,tuple)) and len(p)>=2 else (np.nan,np.nan)
+    if df.empty:
+        st.info("No OBV events for this team.")
+        return
 
-    ev["x_end"], ev["y_end"] = zip(*ev.apply(_end_xy, axis=1))
-    ev = ev.dropna(subset=["x_end","y_end","obv_total_net"])
+    def _loc(r):
+        loc = r.get("location")
+        return loc if isinstance(loc, (list, tuple)) and len(loc) >= 2 else [np.nan, np.nan]
 
-    def _grid(df):
-        H, xe, ye = np.histogram2d(df["x_end"], df["y_end"],
-                                   bins=[bins_x,bins_y],
-                                   range=[[0,120],[0,80]],
-                                   weights=df["obv_total_net"])
-        C, _, _ = np.histogram2d(df["x_end"], df["y_end"],
-                                 bins=[bins_x,bins_y],
-                                 range=[[0,120],[0,80]])
-        return H.T, C.T  # transpose for display
+    df[["x", "y"]] = df.apply(_loc, axis=1, result_type="expand")
+    df = df.dropna(subset=["x", "y", "obv_total_net"])
 
-    H_for,  C_for  = _grid(ev[ev["team"]==team_name])
-    H_opp,  C_opp  = _grid(ev[ev["team"]==oppo_name])
+    xs = np.linspace(0, 120, 300)
+    ys = np.linspace(0, 80, 200)
+    X, Y = np.meshgrid(xs, ys)
 
-    if mode == "for":
-        Z, C = H_for, C_for
-        title = f"OBV for • {team_name}"
-    elif mode == "against":
-        Z, C = H_opp, C_opp
-        title = f"OBV against • {team_name}"
-    elif mode == "per_action":
-        Z = np.divide(H_for - H_opp, (C_for + C_opp), out=np.zeros_like(H_for), where=(C_for+C_opp)>0)
-        C = C_for + C_opp
-        title = f"OBV diff par action • {team_name}"
-    else:  # 'diff'
-        Z, C = H_for - H_opp, C_for + C_opp
-        title = f"Zones OBV {team_name} – {oppo_name})"
+    pos = df[df["obv_total_net"] >= 0]
+    neg = df[df["obv_total_net"] < 0]
 
-    # filter low-volume cells
-    Z = np.where(C >= min_actions, Z, 0.0)
+    Z_pos = np.zeros_like(X)
+    Z_neg = np.zeros_like(X)
 
-    # optional smoothing
-    if smooth_sigma > 0:
-        Z = gaussian_filter(Z, sigma=smooth_sigma)
+    if not pos.empty:
+        kde_pos = gaussian_kde(np.vstack([pos.x, pos.y]),
+                               weights=pos["obv_total_net"], bw_method=bw)
+        Z_pos = kde_pos(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
 
-    # robust color scale
-    vmax = np.nanpercentile(np.abs(Z), vlim_pct) or 1.0
+    if not neg.empty:
+        kde_neg = gaussian_kde(np.vstack([neg.x, neg.y]),
+                               weights=-neg["obv_total_net"], bw_method=bw)
+        Z_neg = kde_neg(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    pitch = Pitch(pitch_type='statsbomb', line_color='black')
-    pitch.draw(ax=ax)
-    im = ax.imshow(np.flipud(Z), extent=[0,120,0,80], aspect="auto",
-                   cmap="RdYlGn", vmin=-vmax, vmax=vmax, alpha=0.8)
+    Z = Z_pos - Z_neg
+    vmax = np.nanpercentile(np.abs(Z), 98) or 1.0
 
-    # thin grid
-    ax.set_xticks(np.linspace(0,120,bins_x+1)); ax.set_yticks(np.linspace(0,80,bins_y+1))
-    ax.grid(True, which="both", color="lightgrey", lw=0.5, alpha=0.5)
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    Pitch(pitch_type="statsbomb", line_color="black").draw(ax=ax)
 
-    cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
-    cbar.set_label("OBV (vert = +  FVC)")
-
-    # annotate top hot/cold cells
-    k = 4
-    flat = Z.flatten()
-    idx_hot  = flat.argsort()[-k:][::-1]
-    idx_cold = flat.argsort()[:k]
-    gx = np.linspace(0,120,bins_x+1); gy = np.linspace(0,80,bins_y+1)
-
-    def _annot(i, color):
-        r, c = divmod(i, Z.shape[1])
-        # flipud in display → row index maps from top
-        r_disp = Z.shape[0]-1-r
-        x0, x1 = gx[c], gx[c+1]; y0, y1 = gy[r_disp], gy[r_disp+1]
-        ax.add_patch(plt.Rectangle((x0,y0), x1-x0, y1-y0, fill=False, ec=color, lw=1.5))
-    for i in idx_hot:  _annot(i, "green")
-    for i in idx_cold: _annot(i, "red")
-
-    ax.set_title(title)
+    im = ax.imshow(
+        Z, extent=[0, 120, 0, 80], origin="lower",
+        cmap="RdYlGn", vmin=-vmax, vmax=vmax, alpha=0.85, aspect="auto"
+    )
+    plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02).set_label("OBV (green = +)")
+    ax.set_title(f"OBV KDE • {team_name}", fontsize=14, fontweight="bold")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     st.pyplot(fig, use_container_width=True)
+
 
 @st.cache_data(show_spinner=False)
 def aggregate_team_matches(comp_id: int, season_id: int, focus_team: str, creds: dict) -> pd.DataFrame:
@@ -457,8 +427,60 @@ if events.empty:
     st.error("Pas d'événements pour ce match.")
     st.stop()
 
+def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
+    shots = events[events["type"] == "Shot"].copy()
+    if shots.empty:
+        st.info("No shots for this match.")
+        return
+
+    x_col = "shot_shot_execution_xg_uplift"
+    y_col = "shot_statsbomb_xg"
+    shots = shots.dropna(subset=[x_col, y_col, "team", "shot_outcome"])
+
+    fig, ax = plt.subplots(figsize=(9, 7), facecolor="white")
+
+    # background highlight
+    ax.axvspan(0.20, shots[x_col].max() + 0.05, facecolor="#F9E79F", alpha=0.3)
+    ax.axhspan(0.20, shots[y_col].max() + 0.05, facecolor="#F9E79F", alpha=0.3)
+
+    for team, color in [(team1, FOCUS_COLOR), (team2, OPPO_COLOR)]:
+        sub = shots[shots["team"] == team]
+        if sub.empty:
+            continue
+        goals = sub[sub["shot_outcome"] == "Goal"]
+        others = sub[sub["shot_outcome"] != "Goal"]
+
+        ax.scatter(
+            others[x_col], others[y_col],
+            s=60, c=color, alpha=0.7, edgecolor="white", label=f"{team} (no goal)"
+        )
+        ax.scatter(
+            goals[x_col], goals[y_col],
+            s=90, c=color, marker="s", edgecolor="black", lw=0.8, label=f"{team} goals"
+        )
+
+    ax.set_xlabel("PsxG", fontsize=12)
+    ax.set_ylabel("xG", fontsize=12)
+    ax.set_title("Shots: PsxG vs xG", fontsize=14, weight="bold")
+
+    # axis style
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_position(("data", 0))
+
+    ax.grid(True, color="lightgrey", lw=0.5, alpha=0.6)
+
+    ax.legend(
+        frameon=False,
+        fontsize=9,
+        loc="lower right",
+        bbox_to_anchor=(1, 0)
+    )
+
+    st.pyplot(fig, use_container_width=True)
+
 # ---------- Onglets principaux ----------
-tab_equipe, tab_joueurs = st.tabs(["Equipe", "Joueurs"])
+tab_equipe, tab_joueurs, tab_kpi = st.tabs(["Equipe", "Joueurs", "KPI"])
 
 with tab_equipe:
 
@@ -482,8 +504,11 @@ with tab_equipe:
     plot_shot_map_combined(events, FOCUS_TEAM, opposition)
 
     # Zones OBV
-    st.markdown("### Zones OBV")
-    plot_obv_zones(events, FOCUS_TEAM, opposition, bins_x=12, bins_y=8)
+    st.markdown("### OBV Heatmap (Versailles)")
+    plot_obv_kde(events, FOCUS_TEAM, bw=0.3)
+
+    st.markdown("### Shot Scatter (xG uplift vs StatsBomb xG)")
+    plot_shot_scatter(events, FOCUS_TEAM, opposition)
 
 
 # ---------- Onglet Joueurs : intégration de ton code adapté ----------
@@ -677,3 +702,93 @@ with tab_joueurs:
     ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
+    
+
+# --- KPI helpers (safe) ------------------------------------------------------
+def _zscore(series: pd.Series) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    mu = s.mean()
+    sd = s.std(ddof=0)
+    if pd.isna(sd) or sd == 0:
+        return pd.Series([0.0] * len(s), index=series.index)
+    return (s - mu) / sd
+
+def group_by_count(count_df: pd.DataFrame) -> pd.DataFrame:
+    if count_df.empty:
+        return pd.DataFrame(columns=["team","match_id","value","plot"])
+    out = count_df.groupby(["team","match_id"]).size().reset_index(name="value")
+    out["plot"] = _zscore(out["value"])
+    return out
+
+def group_by_metric(metric_df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    if metric_df.empty or metric not in metric_df.columns:
+        return pd.DataFrame(columns=["team","match_id","value","plot"])
+    out = (
+        metric_df.groupby(["team","match_id"])[metric]
+        .sum().reset_index(name="value")
+    )
+    out["plot"] = _zscore(out["value"])
+    return out
+
+# --- KPI point plotter -------------------------------------------------------
+def plot_variable(team: str, plot_data: pd.DataFrame, y_value: float, game_id: int, ax):
+    if plot_data.empty:
+        return
+    is_this = plot_data["match_id"] == game_id
+    # visuals
+    color_team = FOCUS_COLOR if team == FOCUS_TEAM else OPPO_COLOR
+    color_other = OPPO_COLOR if team == FOCUS_TEAM else FOCUS_COLOR
+
+    plot_data = plot_data.copy()
+    plot_data["alpha"] = np.where(is_this, 1.0, 0.2)
+    plot_data["ec"]    = np.where(is_this, color_team, color_other)
+    plot_data["size"]  = np.where(is_this, 5000.0, 500.0)
+    plot_data["color"] = np.where(is_this, color_other, color_team)
+
+    x = plot_data["plot"].to_numpy()
+    y = np.full_like(x, y_value, dtype=float)
+    ax.scatter(x, y, s=plot_data["size"], alpha=plot_data["alpha"],
+               c=plot_data["color"], ec=plot_data["ec"], lw=5, zorder=10)
+
+    this_row = plot_data[is_this]
+    if not this_row.empty:
+        val = float(this_row.iloc[0]["value"])
+        x_pos = float(this_row.iloc[0]["plot"])
+        ax.annotate(f"{val:.2f}", (x_pos, y_value - 0.05),
+                    color="white", fontsize=22, fontweight="bold", ha="center", zorder=11)
+
+    
+with tab_kpi:
+    st.markdown("## 📊 KPI (benchmark match vs saison)")
+
+    df = events  # already loaded for match_id
+
+    def plot_team_data_simple(team: str, df_events: pd.DataFrame, game_id: int):
+        fig, ax = plt.subplots(figsize=(12, 8))
+        # Shots For (exclude penalties if column exists)
+        shots_for = df_events[(df_events["type"] == "Shot") & (df_events["team"] == team)].copy()
+        if "shot_type" in shots_for.columns:
+            shots_for = shots_for[shots_for["shot_type"].ne("Penalty")]
+        shots_df = group_by_count(shots_for)
+        plot_variable(team, shots_df, 0, game_id, ax)
+
+        # xG For
+        xg_for = group_by_metric(shots_for, "shot_statsbomb_xg")
+        plot_variable(team, xg_for, 1, game_id, ax)
+
+        # Pressures
+        pressures = df_events[(df_events["type"] == "Pressure") & (df_events["team"] == team)].copy()
+        pressures_df = group_by_count(pressures)
+        plot_variable(team, pressures_df, 2, game_id, ax)
+
+        ax.set_yticks([0, 1, 2])
+        ax.set_yticklabels(["Shots", "xG", "Pressures"], fontsize=12)
+        ax.axvline(0, c="black", ls="--", lw=2)
+        ax.set_xlim(-3, 3)
+        ax.set_title(f"KPI Match vs saison — {team}")
+        for s in ["top", "right", "left", "bottom"]:
+            ax.spines[s].set_visible(False)
+        return fig
+
+    fig_kpi = plot_team_data_simple(FOCUS_TEAM, df, match_id)
+    st.pyplot(fig_kpi, use_container_width=True)
