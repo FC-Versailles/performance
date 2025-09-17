@@ -26,6 +26,7 @@ cmaps = matplotlib.cm.get_cmap('RdYlGn')
 cmapa = matplotlib.cm.get_cmap('Greens')  # ou RdYlGn pour du rouge/vert
 import matplotlib.colors as mcolors
 import plotly.graph_objects as go
+from scipy.stats import zscore
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -403,7 +404,7 @@ elif page == "Entrainement":
     st.markdown("### Entraînement")
     allowed_tasks = [
         "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
-        "OPTI +", "OPTI J-1", "MICRO", "DEV INDIV"
+        "OPTI +", "OPTI J-1", "MICRO", "DEV INDIV","WU + GAME + COMP"
     ]
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     valid_dates = train_data["Date"].dropna()
@@ -1525,350 +1526,502 @@ elif page == "Entrainement":
 
 # ── PAGE: MATCH ───────────────────────────────────────────────────────────────
 elif page == "Match":
+    st.markdown("#### 🧮 Match | Composante athlétique")
 
-    st.subheader("⚽ Performance du match")
-    
-    # 1) Filter to GAME rows
-    mask = (
-        data["Type"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.upper() == "GAME"
+    # --- Filter only GAME rows (no Prepa / N3)
+    games = (
+        data[data["Type"].astype(str).str.upper().str.strip() == "GAME"]
+        .loc[~data["Jour"].astype(str).str.lower().eq("prepa")]
+        .loc[~data["Jour"].astype(str).str.strip().eq("N3")]
+        .copy()
     )
-    match_data = data[mask].copy()
-    
-    # 2) Ensure Date is datetime
-    if not pd.api.types.is_datetime64_any_dtype(match_data["Date"]):
-        match_data["Date"] = pd.to_datetime(match_data["Date"], errors="coerce")
-    
-    # 3) Date filter (select only one, default: latest)
-    available_dates = sorted(match_data["Date"].dt.date.dropna().unique())
-    if available_dates:
-        default_last = available_dates[-1]
-        selected_date = st.selectbox(
-            "Choisissez un match",
-            options=available_dates,
-            format_func=lambda d: d.strftime("%d/%m/%Y"),
-            index=len(available_dates) - 1  # default: last date
-        )
-        match_data = match_data[match_data["Date"].dt.date == selected_date]
-    else:
-        match_data = match_data.iloc[:0]
-    
-    # 4) Prepare & clean/cast numbers for display
-    cols = [
-        "Name", "Duration", "Distance", "M/min",
-        "Distance 15km/h", "M/min 15km/h",
-        "Distance 15-20km/h", "Distance 20-25km/h",
-        "Distance 25km/h", "N° Sprints", "Acc", "Dec",
-        "Vmax", "Distance 90% Vmax"
+    games["Date"] = pd.to_datetime(games["Date"], errors="coerce")
+
+    # --- Clean numeric columns needed for derived metrics
+    base_cols = [
+        "Duration", "M/min", "M/min 15km/h",
+        "Distance 20-25km/h", "Distance 25km/h",
+        "N° Sprints", "Acc"
     ]
-    stat_cols = [c for c in cols if c != "Name"]
-    
-    df = match_data.loc[:, cols].copy()
-    for c in stat_cols:
-        if c in df.columns:
-            cleaned = (
-                df[c].astype(str)
-                      .str.replace(r"[^\d\-,\.]", "", regex=True)
-                      .str.replace(",", ".", regex=False)
-                      .replace("", pd.NA)
+    for c in base_cols:
+        if c in games.columns:
+            games[c] = (
+                games[c].astype(str)
+                        .str.replace(r"[^\d\-,\.]", "", regex=True)
+                        .str.replace(",", ".", regex=False)
+                        .replace("", pd.NA)
             )
-            num = pd.to_numeric(cleaned, errors="coerce")
-        else:
-            num = pd.Series(pd.NA, index=df.index)
+            games[c] = pd.to_numeric(games[c], errors="coerce")
+
+    # --- Derived variables ---
+    # 1) M/min 20-25km/h
+    if {"Distance 20-25km/h", "Duration"}.issubset(games.columns):
+        games["M/min 20-25km/h"] = np.where(
+            (games["Duration"] > 0) & games["Distance 20-25km/h"].notna(),
+            games["Distance 20-25km/h"] / games["Duration"],
+            np.nan
+        )
+    # 2) M/min 25km/h  (no “Distance” word)
+    if {"Distance 25km/h", "Duration"}.issubset(games.columns):
+        games["M/min 25km/h"] = np.where(
+            (games["Duration"] > 0) & games["Distance 25km/h"].notna(),
+            games["Distance 25km/h"] / games["Duration"],
+            np.nan
+        )
+    # 3) Sprints/min
+    if {"N° Sprints", "Duration"}.issubset(games.columns):
+        games["Sprints/min"] = np.where(
+            (games["Duration"] > 0) & games["N° Sprints"].notna(),
+            games["N° Sprints"] / games["Duration"],
+            np.nan
+        )
+    # 4) Acc/min
+    if {"Acc", "Duration"}.issubset(games.columns):
+        games["Acc/min"] = np.where(
+            (games["Duration"] > 0) & games["Acc"].notna(),
+            games["Acc"] / games["Duration"],
+            np.nan
+        )
+
+    # --- One date per Jour for ordering
+    jour_dates = (
+        games.groupby("Jour", as_index=False)["Date"]
+             .min()
+             .rename(columns={"Date": "MatchDate"})
+    )
+
+    # --- Keep only the wanted columns
+    keep_cols = [
+        "Jour", "M/min", "M/min 15km/h",
+        "M/min 20-25km/h", "M/min 25km/h",
+        "Sprints/min", "Acc/min"
+    ]
+    num_cols = [c for c in keep_cols if c != "Jour" and c in games.columns]
+
+    # --- Mean per Jour
+    team_mean = (
+        games.groupby("Jour", as_index=False)[num_cols].mean(numeric_only=True)
+        .merge(jour_dates, on="Jour", how="left")
+        .sort_values("MatchDate")
+        .tail(4)   # last 4 games
+    )
+
+    # --- Rounding
+    for c in num_cols:
+        team_mean[c] = team_mean[c].astype(float).round(2)
+
+    versailles_blue = "#0031E3"
     
-        if c == "Vmax":
-            df[c] = num.round(1)
-        else:
-            df[c] = num.round(0).astype("Int64")
+    def highlight_last_row(row, last_index):
+        return [
+            f"background-color:{versailles_blue}; color:white"
+            if row.name == last_index else ""
+            for _ in row
+        ]
     
-    # 5) --- CALCUL REF MATCH AVANT LE TABLEAU ---
-    match_df = data[mask].copy()
-    if match_df.empty:
-        st.info("Aucune donnée de match pour construire la référence.")
-        Refmatch = None
-    else:
-        # Clean & numeric‐cast
-        for c in stat_cols:
-            if c in match_df.columns:
-                cleaned = (
-                    match_df[c].astype(str)
-                               .str.replace(r"[^\d\-,\.]", "", regex=True)
-                               .str.replace(",", ".", regex=False)
-                               .replace("", pd.NA)
-                )
-                match_df[c] = pd.to_numeric(cleaned, errors="coerce")
+    df_view  = team_mean[["Jour"] + num_cols]
+    last_idx = df_view.index.max()
+    
+    styled = (
+        df_view.style
+            .apply(highlight_last_row, axis=1, last_index=last_idx)
+            .format({col: "{:.2f}" for col in num_cols})
+            .set_table_styles(
+                [
+                    {"selector": "thead tr th", "props": [("color", "black"), ("font-weight", "bold")]},
+                    {"selector": "th.col_heading", "props": [("color", "black"), ("font-weight", "bold")]},
+                ],
+                overwrite=True,
+            )
+    )
+    
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    
+    # 1) Global mean over all games
+    global_mean = (
+        games.groupby("Jour", as_index=False)[num_cols]
+             .mean(numeric_only=True)[num_cols]
+             .mean(numeric_only=True)   # mean across Jour -> mean of team
+             .round(2)
+    )
+
+    # rattacher les positions
+    games["Pos"] = games["Name"].str.upper().map(player_positions).fillna("NC")
+    metrics = num_cols
+    
+    def mean_for(pos):
+        sub = games.loc[games["Pos"] == pos, metrics]
+        return sub.mean(numeric_only=True).round(2)
+    
+    mean_team = games[metrics].mean().round(2)
+    mean_dc   = mean_for("DC")
+    mean_m    = mean_for("M")
+    mean_pis  = mean_for("PIS")
+    mean_att  = mean_for("ATT")
+    
+    rows = [
+        ("Moyenne équipe", mean_team),
+        ("Moyenne DC",     mean_dc),
+        ("Moyenne M",      mean_m),
+        ("Moyenne PIS",    mean_pis),
+        ("Moyenne ATT",    mean_att),
+    ]
+    summary = pd.DataFrame([r[1] for r in rows], index=[r[0] for r in rows]).reset_index()
+    summary = summary.rename(columns={"index": "Ligne"})
+    
+    st.write("📌 Moyenne | Postes & équipe")
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+    
+    # 2) Select a game to compare
+    sel_jour = st.selectbox("Comparer un match", team_mean["Jour"].tolist())
+    
+    if sel_jour:
+        row = team_mean.loc[team_mean["Jour"] == sel_jour, num_cols].iloc[0]
+        pct_var = ((row - global_mean) / global_mean * 100).round(1)
+    
+        st.markdown(f"**Écart de {sel_jour} par rapport à la moyenne globale :**")
+    
+        for col, pct in pct_var.items():
+            if pd.isna(pct):
+                continue
+            if pct > 5:
+                emoji = "🟢"
+            elif pct < -5:
+                emoji = "🔴"
             else:
-                match_df[c] = pd.NA
+                emoji = "⚪️"
+            st.markdown(f"- {col} : {pct:+.1f}% {emoji}")
+
+    # === 📊 Performance athlétique joueurs ===
+
+
+
+    st.markdown("#### 📊 Performance athlétique joueurs")
     
-        records = []
-        for name, grp in match_df.groupby("Name"):
-            rec = {"Name": name}
-            full = grp[grp["Duration"] >= 90]
-            if not full.empty:
-                for c in stat_cols:
-                    rec[c] = full[c].max()
-            else:
-                longest = grp.loc[grp["Duration"].idxmax()]
-                orig = longest["Duration"]
-                rec["Duration"] = orig
-                for c in stat_cols:
-                    val = longest[c]
-                    if c in {"Duration", "Vmax", "M/min", "M/min 15km/h"}:
-                        rec[c] = val
-                    elif pd.notna(val) and orig > 0:
-                        rec[c] = 90 * val / orig
-                    else:
-                        rec[c] = pd.NA
-            records.append(rec)
-        Refmatch = pd.DataFrame.from_records(records, columns=["Name"] + stat_cols)
-        for c in stat_cols:
-            if c == "Vmax":
-                Refmatch[c] = Refmatch[c].round(1)
-            else:
-                Refmatch[c] = Refmatch[c].round(0).astype("Int64")
+    # --- filter rows ------------------------------------------------------------
+    mask_game = (
+        data["Type"].fillna("").astype(str).str.strip().str.upper().eq("GAME")
+        & ~data["Jour"].astype(str).str.lower().eq("prepa")
+        & ~data["Jour"].astype(str).str.upper().eq("N3")
+    )
+    match_all = data.loc[mask_game].copy()
+    match_all["Date"] = pd.to_datetime(match_all["Date"], errors="coerce")
     
-    # 6) --- TABLEAU COLORÉ ---
-    if Refmatch is not None and not Refmatch.empty:
-        import matplotlib
-        import matplotlib.colors as mcolors
+    jours = sorted(match_all["Jour"].dropna().unique())
+    if not jours:
+        st.info("Aucun match disponible.")
+        st.stop()
     
-        cmap = matplotlib.cm.get_cmap('Greens')
-        ref_dict = Refmatch.set_index("Name")[stat_cols].to_dict(orient="index")
+    sel_jour = st.selectbox("Choisissez un match (Jour)", options=jours, index=len(jours)-1)
+    match_rows = match_all.loc[match_all["Jour"] == sel_jour].copy()
     
-        def get_color(val, ref, threshold=0.9):
-            if pd.isna(val) or pd.isna(ref):
-                return "background-color:#eee;"
-            ratio = float(val) / ref if ref else 0
-            if ratio >= 0.999:  # pile la valeur de ref
-                rgb = cmap(1.0)[:3]
-            elif ratio >= threshold:
-                rgb = cmap(0.6)[:3]
-            else:
-                return ""  # pas de couleur si <90%
-            hex_color = mcolors.rgb2hex(rgb)
-            return f"background-color:{hex_color};"
+    # --- metrics ----------------------------------------------------------------
+    METRICS = [
+        "Distance","M/min","Distance 15km/h","M/min 15km/h",
+        "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
+        "N° Sprints","Acc","Dec","Vmax","Distance 90% Vmax"
+    ]
+    ALL_COLS = ["Name","Duration"] + METRICS
     
-        # Générer le HTML
-        html = """
-        <html>
-        <head>
-          <style>
-            .centered-table {{ border-collapse:collapse; width:100%; }}
-            .centered-table th, .centered-table td {{
-              text-align:center; padding:4px 8px; border:1px solid #ddd;
-            }}
-            .centered-table th {{ background:#f0f0f0; }}
-          </style>
-        </head>
-        <body>
-          <div style="max-height:{}px;overflow-y:auto;">
-            <table class="centered-table">
-              <thead>
-                <tr>{}</tr>
-              </thead>
-              <tbody>
-        """.format(
-            max(300, len(df) * 35),
-            "".join([f"<th>{col}</th>" for col in df.columns])
+    # --- numeric cleaning -------------------------------------------------------
+    def to_num(s):
+        return pd.to_numeric(
+            pd.Series(s, dtype="object")
+              .astype(str)
+              .str.replace(r"[^\d\-,\.]", "", regex=True)
+              .str.replace(",", ".", regex=False)
+              .replace("", pd.NA),
+            errors="coerce"
         )
     
-        for i, row in df.iterrows():
-            name = row["Name"]
-            html += "<tr>"
-            for j, col in enumerate(df.columns):
-                val = row[col]
-                style = ""
-                if col in stat_cols and name in ref_dict and col in ref_dict[name]:
-                    ref = ref_dict[name][col]
-                    style = get_color(val, ref)
-                if col == "Vmax" and pd.notna(val):
-                    disp = f"{val:.1f}"
-                elif col != "Name" and pd.notna(val):
-                    disp = str(int(val))
+    # ===== 1) Build player reference from all matches ==========================
+    rate_like = {"M/min","M/min 15km/h","Vmax"}
+    match_all["Duration"] = to_num(match_all["Duration"])
+    
+    ref_records = []
+    for name, grp in match_all.groupby("Name"):
+        rec = {"Name": name}
+        full = grp.loc[grp["Duration"] >= 90].copy()
+    
+        gnum = grp.copy()
+        for c in METRICS:
+            if c in gnum.columns:
+                gnum[c] = to_num(gnum[c])
+    
+        if not full.empty:
+            fnum = full.copy()
+            for c in METRICS:
+                if c in fnum.columns:
+                    fnum[c] = to_num(fnum[c])
+            rec["Duration"] = float(full["Duration"].max())
+            for c in METRICS:
+                rec[c] = float(fnum[c].max(skipna=True)) if c in fnum.columns else np.nan
+        else:
+            idx = gnum["Duration"].idxmax()
+            row = gnum.loc[idx]
+            dur = float(row.get("Duration")) if pd.notna(row.get("Duration")) else np.nan
+            rec["Duration"] = dur
+            for c in METRICS:
+                val = float(row.get(c)) if c in gnum.columns and pd.notna(row.get(c)) else np.nan
+                if c in rate_like:
+                    rec[c] = val
                 else:
-                    disp = val if pd.notna(val) else ""
-                html += f'<td style="{style}">{disp}</td>'
-            html += "</tr>"
+                    rec[c] = 90 * val / dur if pd.notna(val) and pd.notna(dur) and dur > 0 else np.nan
+        ref_records.append(rec)
     
-        html += """
-              </tbody>
-            </table>
-          </div>
-        </body>
-        </html>
-        """
+    ref_df = pd.DataFrame.from_records(ref_records, columns=["Name","Duration"]+METRICS)
+    ref_idx = ref_df.set_index("Name")
     
-        components.html(html, height=max(300, len(df) * 35) + 1, scrolling=True)
+    # ===== 2) % vs reference for current match =================================
+    df = match_rows.loc[:, [c for c in ALL_COLS if c in match_rows.columns]].copy()
+    for c in ALL_COLS:
+        if c in df.columns and c != "Name":
+            df[c] = to_num(df[c])
     
-    else:
-        st.info("Aucune référence pour coloration.")
+    for c in ["Duration"] + METRICS:
+        if c not in df.columns:
+            continue
+        pct_col = f"{c} (%)"
+    
+        def pct_func(row):
+            val = row.get(c)
+            ref_val = ref_idx.at[row["Name"], c] if (row["Name"] in ref_idx.index and c in ref_idx.columns) else np.nan
+            if pd.notna(val) and pd.notna(ref_val) and ref_val > 0:
+                return round(val / ref_val * 100, 1)
+            return np.nan
+    
+        df[pct_col] = df.apply(pct_func, axis=1)
+    
+    # ===== 3) sort players by Duration =========================================
+    df = df.sort_values("Duration", ascending=False).reset_index(drop=True)
+    full_dur = df["Duration"].max(skipna=True)   # best duration
+    
+    # ===== 4) build HTML with colours ==========================================
+    header_html = "".join(f"<th>{col}</th>" for col in ["Name","Duration"]+METRICS)
+    rows_html = []
+    
+    for _, row in df.iterrows():
+        is_full = pd.notna(row["Duration"]) and row["Duration"] == full_dur
+        row_cells = [f"<td>{row['Name']}</td>"]
+    
+        # Duration cell (never %)
+        dur_text = f"{int(row['Duration'])}" if pd.notna(row["Duration"]) else ""
+        row_cells.append(f"<td>{dur_text}</td>")
+    
+        # metrics
+        for col in METRICS:
+            val = row.get(col)
+            pct = row.get(f"{col} (%)")
+            text = ""
+            if pd.notna(val) and pd.notna(pct):
+                text = f"{val:.1f} ({pct:.0f}%)" if col=="Vmax" else f"{int(val)} ({pct:.0f}%)"
+            elif pd.notna(val):
+                text = f"{val:.1f}" if col=="Vmax" else f"{int(val)}"
+    
+            style = ""
+            if is_full and pd.notna(pct):
+                if pct > 110:
+                    style = "background-color: lightgreen;"
+                elif pct < 90:
+                    style = "background-color: lightcoral;"
+    
+            row_cells.append(f'<td style="{style}">{text}</td>')
+        rows_html.append(f"<tr>{''.join(row_cells)}</tr>")
+    
+    html = f"""
+    <div style="max-height:600px;overflow-y:auto;">
+    <table style="border-collapse:collapse;width:100%;font-size:12px;">
+    <thead>
+    <tr style="background:#0031E3;color:white;">{header_html}</tr>
+    </thead>
+    <tbody>
+    {''.join(rows_html)}
+    </tbody>
+    </table>
+    </div>
+    """
+    
+    st.markdown(html, unsafe_allow_html=True)
 
 
-    # D) Display
+        
+    # --- derived metrics ---
+    if {"Distance 25km/h", "Duration"}.issubset(df.columns):
+        df["M/min Distance 25km/h"] = df.apply(
+            lambda r: round(r["Distance 25km/h"] / r["Duration"], 1)
+            if pd.notna(r["Distance 25km/h"]) and pd.notna(r["Duration"]) and r["Duration"] > 0
+            else pd.NA,
+            axis=1
+        )
+    
+    if {"Acc", "Duration"}.issubset(df.columns):
+        df["Acc/min"] = df.apply(
+            lambda r: round(r["Acc"] / r["Duration"], 2)
+            if pd.notna(r["Acc"]) and pd.notna(r["Duration"]) and r["Duration"] > 0
+            else pd.NA,
+            axis=1
+        )
+    
+    intensity_cols = [c for c in ["M/min", "M/min 15km/h", "M/min Distance 25km/h", "Acc/min"] if c in df.columns]
+    
+    for metric in intensity_cols:
+        plot_df = df[["Name", "Duration", metric]].dropna(subset=[metric]).copy()
+        if plot_df.empty:
+            continue
+        plot_df = plot_df.sort_values(metric, ascending=False)
+        plot_df["Couleur"] = np.where(plot_df["Duration"] < 40, "#CFB013", "#0031E3")
+        plot_df["Label"] = plot_df[metric].apply(
+            lambda v: f"{v:.2f}" if pd.notna(v) else ""
+        )
+    
+        fig_bar = px.bar(
+            plot_df,
+            x="Name",
+            y=metric,
+            color="Couleur",
+            color_discrete_map="identity",
+            text="Label",
+            title=f"{metric} par joueur",
+        )
+        fig_bar.update_traces(textposition="outside")
+        fig_bar.update_layout(
+            showlegend=False,
+            xaxis_title="Joueur",
+            yaxis_title=metric,
+            height=520,
+            margin=dict(t=40, b=40, l=40, r=20),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+
+    metrics = ["M/min", "M/min 15km/h", "M/min Distance 25km/h", "Acc/min"]
+    metrics = [m for m in metrics if m in df.columns]
+    
+    Z = df[metrics].apply(lambda col: pd.Series(zscore(col, nan_policy="omit"), index=df.index))
+    names = df["Name"]
+    vers_blue = "#0031E3"
+    
+    def list_by_metric(metric, high=True, thr=0.9):
+        s = Z[metric].dropna()
+        sel = s[s > thr] if high else s[s < -thr]
+        if sel.empty:
+            return "- Aucun"
+        return "\n".join(f"- {names.loc[i]} ({sel.loc[i]:.2f})" for i in sel.index)
+    
+    high_lines = [
+        f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, high=True, thr=0.9)}"
+        for m in metrics
+    ]
+    low_lines = [
+        f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, high=False, thr=0.9)}"
+        for m in metrics
+    ]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(
+            "<b>Performances élevées (Z &gt; 0.9)</b><br>"
+            + "<br><br>".join(high_lines),
+            unsafe_allow_html=True,
+        )
+    
+    with col2:
+        st.markdown(
+            "<b>Performances basses (Z &lt; -0.9)</b><br>"
+            + "<br><br>".join(low_lines),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
+
+    # ========== 3) RÉFÉRENCE MATCH TABLE (styled) ==========
     st.subheader("🏆 Référence Match")
     
-    ref_df = Refmatch.copy()
-    ref_df = ref_df[[c for c in cols if c in ref_df.columns]]
+    if ref_df.empty:
+        st.info("Aucune référence disponible pour ce match.")
+        st.stop()
+    
+    ref_view = ref_df.copy()
     
     def value_to_color(val, vmin, vmax):
         if pd.isna(val):
-            return "background-color:#eee;"  # gris clair pour NA
-        norm = (val - vmin) / (vmax - vmin) if vmax > vmin else 0.5
-        rgb = cmaps(norm)[:3]
-        hex_color = mcolors.rgb2hex(rgb)
-        return f"background-color:{hex_color};"
+            return "background-color:#eee;"
+        rng = float(vmax) - float(vmin)
+        norm = (float(val) - float(vmin)) / rng if rng > 0 else 0.5
+        r, g, b, _ = cmaps(norm)
+        return f"background-color:{mcolors.rgb2hex((r, g, b))};"
     
-    # Construit la matrice de styles :
-    styles = []
-    for col in ref_df.columns:
+    # style matrix
+    cell_styles = []
+    for j, col in enumerate(ref_view.columns):
         if col == "Name":
-            styles.append([""] * len(ref_df))
+            cell_styles.append([""] * len(ref_view))
             continue
-        vals = ref_df[col]
+        vals = pd.to_numeric(ref_view[col], errors="coerce")
         vmin, vmax = vals.min(skipna=True), vals.max(skipna=True)
-        col_styles = [value_to_color(v, vmin, vmax) for v in vals]
-        styles.append(col_styles)
+        cell_styles.append([value_to_color(v, vmin, vmax) for v in vals])
     
-    # Transpose pour avoir les styles par ligne
-    styles_per_row = list(map(list, zip(*styles)))
+    styles_per_row = list(map(list, zip(*cell_styles)))
+    header_html = "".join(f"<th>{col}</th>" for col in ref_view.columns)
     
-    # Génère le HTML du tableau avec couleurs
-    html = """
+    rows_html = []
+    for i, row in ref_view.iterrows():
+        tds = []
+        for j, val in enumerate(row):
+            style = styles_per_row[i][j]
+            col = ref_view.columns[j]
+            if col == "Name":
+                disp = str(val) if pd.notna(val) else ""
+            elif col.lower().startswith("vmax") and pd.notna(val):
+                disp = f"{float(val):.1f}"
+            elif pd.notna(val) and isinstance(val, (int, float, np.floating, np.integer)):
+                disp = f"{int(float(val))}"
+            else:
+                disp = "" if pd.isna(val) else str(val)
+            tds.append(f'<td style="{style}">{disp}</td>')
+        rows_html.append(f"<tr>{''.join(tds)}</tr>")
+    
+    table_height = max(300, len(ref_view) * 35)
+    html = f"""
     <html>
     <head>
       <style>
-        .centered-table {{ border-collapse:collapse; width:100%; }}
-        .centered-table th, .centered-table td {{
-          text-align:center; padding:4px 8px; border:1px solid #ddd;
+        .centered-table {{
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 12px;
         }}
-        .centered-table th {{ background:#f0f0f0; }}
+        .centered-table th, .centered-table td {{
+            text-align: center;
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+        }}
+        .centered-table th {{
+            background-color: #0031E3;
+            color: white;
+            font-weight: bold;
+            white-space: nowrap;
+        }}
       </style>
     </head>
     <body>
-      <div style="max-height:{}px;overflow-y:auto;">
+      <div style="max-height:{table_height}px; overflow-y:auto;">
         <table class="centered-table">
-          <thead>
-            <tr>{}</tr>
-          </thead>
+          <thead><tr>{header_html}</tr></thead>
           <tbody>
-    """.format(
-        max(300, len(ref_df) * 35),
-        "".join([f"<th>{col}</th>" for col in ref_df.columns])
-    )
-    
-    for i, row in ref_df.iterrows():
-        html += "<tr>"
-        for j, val in enumerate(row):
-            style = styles_per_row[i][j]
-            # Affichage selon la colonne
-            if ref_df.columns[j] == "Vmax" and pd.notna(val):
-                disp = f"{val:.1f}"
-            elif ref_df.columns[j] != "Name" and pd.notna(val):
-                disp = str(int(val))
-            else:
-                disp = val if pd.notna(val) else ""
-            html += f'<td style="{style}">{disp}</td>'
-        html += "</tr>"
-    
-    html += """
+            {''.join(rows_html)}
           </tbody>
         </table>
       </div>
     </body>
     </html>
     """
-    
-    components.html(html, height=max(300, len(ref_df) * 35) + 1, scrolling=True)
+    components.html(html, height=table_height + 40, scrolling=True)
 
-        # st.subheader("🎯 Objectifs Match") #Match de préparation
-        
-        # objective_fields = [
-        #     "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-        #     "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-        # ]
-        
-        # # 1) Sliders in 2×5 grid
-        # row1, row2 = objective_fields[:5], objective_fields[5:]
-        # objectives = {}
-        # cols5 = st.columns(5)
-        # for i, stat in enumerate(row1):
-        #     with cols5[i]:
-        #         objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
-        # cols5 = st.columns(5)
-        # for i, stat in enumerate(row2):
-        #     with cols5[i]:
-        #         objectives[stat] = st.slider(f"{stat} (%)", 0, 100, 100, key=f"obj_{stat}")
-        
-        # # 2) Compute % of personal reference per match row
-        # obj_df = df.copy()
-        # ref_indexed = Refmatch.set_index("Name")
-        # for c in objective_fields:
-        #     obj_df[f"{c} %"] = obj_df.apply(
-        #         lambda r: round(r[c] / ref_indexed.at[r["Name"], c] * 100, 1)
-        #                   if (r["Name"] in ref_indexed.index
-        #                       and pd.notna(ref_indexed.at[r["Name"], c]) 
-        #                       and ref_indexed.at[r["Name"], c] > 0
-        #                       and pd.notna(r[c]))
-        #                   else pd.NA,
-        #         axis=1
-        #     )
-        
-        # # 3) Highlight helper
-        # def highlight_stat(val, obj):
-        #     if pd.isna(val):
-        #         return ""
-        #     d = abs(val - obj)
-        #     if d <= 5:   return "background-color: #c8e6c9;"
-        #     if d <= 10:  return "background-color: #fff9c4;"
-        #     if d <= 15:  return "background-color: #ffe0b2;"
-        #     if d <= 20:  return "background-color: #ffcdd2;"
-        #     return ""
-        
-        # # 4) Build & render styled table
-        # display_cols = ["Name"] + sum([[c, f"{c} %"] for c in objective_fields], [])
-        # styled = (
-        #     obj_df.loc[:, display_cols]
-        #           .style
-        #           .format(
-        #               { **{f"{c} %": "{:.1f} %" for c in objective_fields},
-        #                 **{"Vmax": "{:.1f}"}                # one decimal for raw Vmax
-        #               },
-        #               na_rep="—"
-        #           )
-        # )
-        
-        # # apply per-column highlighting only on the % columns
-        # for c in objective_fields:
-        #     styled = styled.applymap(
-        #         lambda v, obj=objectives[c]: highlight_stat(v, obj),
-        #         subset=[f"{c} %"]
-        #     )
-        
-        # styled = styled.set_table_attributes('class="centered-table"')
-        
-        # # 5) wrap in scrollable div
-        # html_obj = styled.to_html()
-        # row_h = 35
-        # total_h2 = max(300, len(obj_df) * row_h)
-        # html2 = f"""
-        # <html><head>
-        #   <style>
-        #     .centered-table {{ border-collapse:collapse; width:100%; }}
-        #     .centered-table th, .centered-table td {{
-        #       text-align:center; padding:4px 8px; border:1px solid #ddd;
-        #     }}
-        #     .centered-table th {{ background:#f0f0f0; }}
-        #   </style>
-        # </head><body>
-        #   <div style="max-height:{total_h2}px;overflow-y:auto;">
-        #     {html_obj}
-        #   </div>
-        # </body></html>
-        # """
-        # components.html(html2, height=total_h2 + 20, scrolling=True)
+
+
 
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
@@ -2239,12 +2392,14 @@ elif page == "Minutes de jeu":
     mask = (
         df[type_col].eq("GAME")
         & ~df[jours_col].str.lower().eq("prepa")
+        & ~df[jours_col].str.upper().eq("N3")      # <── exclusion
         & df[minutes_col].notna()
     )
     dg = df.loc[mask].copy()
     if dg.empty:
-        st.info("Pas de GAME avec Jour != 'prepa'.")
+        st.info("Pas de GAME avec Jour != 'prepa' et != 'N3'.")
         st.stop()
+
 
     # bar chart
     tot = (
