@@ -649,7 +649,6 @@ elif page == "Post-entrainement":
 
 elif page == "Joueurs":
 
-    st.header("Joueur")
     
     # --- Normalisation des noms ---
     data['Nom'] = data['Nom'].str.strip().str.title()
@@ -789,8 +788,66 @@ elif page == "Joueurs":
     
     st.plotly_chart(fig, use_container_width=True)
     st.markdown(f"**{trend}**")
+        
+    # --- Douleurs déclarées (dd-mm-yy robuste) ---
+    cols_needed = ["Date", "Identifie l'emplacement de la douleur", "Intensité de la douleur"]
+    if set(cols_needed).issubset(df_player.columns):
+        pain_df = df_player[cols_needed].copy()
     
+        # drop NaN or blank fields
+        pain_df = pain_df.dropna(subset=cols_needed[1:])
+        for c in cols_needed[1:]:
+            pain_df = pain_df[pain_df[c].astype(str).str.strip().ne("")]
     
+        # parse date as day-first, keep both dt and formatted
+        pain_df["Date_dt"] = pd.to_datetime(pain_df["Date"], errors="coerce", dayfirst=True)
+        pain_df = pain_df.dropna(subset=["Date_dt"])
+        pain_df["Date_fmt"] = pain_df["Date_dt"].dt.strftime("%d-%m-%y")
     
+        # numeric intensity only
+        pain_df["Intensité de la douleur"] = pd.to_numeric(pain_df["Intensité de la douleur"], errors="coerce")
+        pain_df = pain_df.dropna(subset=["Intensité de la douleur"])
     
+        # sort chronologically
+        pain_df = pain_df.sort_values("Date_dt")
+    
+        # table with Date as index and only Emplacement/Intensité
+        show_df = (
+            pain_df.rename(columns={
+                "Identifie l'emplacement de la douleur": "Emplacement",
+                "Intensité de la douleur": "Intensité"
+            })[["Date_fmt", "Emplacement", "Intensité"]]
+            .set_index("Date_fmt")
+        )
+    
+        if not show_df.empty:
+            st.markdown("### Douleurs déclarées")
+            st.dataframe(show_df, use_container_width=True)
+    
+            # --- Bar plot Intensité (y: 1→10) ---
+            fig_pain = go.Figure(go.Bar(
+                x=show_df.index.tolist(),  # formatted dd-mm-yy
+                y=show_df["Intensité"],
+                marker_color="#0031E3"
+            ))
+            fig_pain.update_layout(
+                title="Intensité des douleurs",
+                xaxis_title="Date",
+                yaxis_title="Intensité",
+                yaxis=dict(range=[1, 10]),
+                xaxis=dict(
+                    type="category",
+                    categoryorder="array",
+                    categoryarray=show_df.index.tolist()
+                ),
+                template="simple_white",
+                height=400
+            )
+            st.plotly_chart(fig_pain, use_container_width=True)
+    
+            
+            
+            
+            
+         
     
