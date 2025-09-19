@@ -1695,9 +1695,112 @@ elif page == "Match":
 
     # === 📊 Performance athlétique joueurs ===
 
+    st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)  
+    st.markdown("#### ⏱️ Période du match")
+    
+    # 1) GAME ANALYSIS
+    df_analysis = data.loc[data["Type"].astype(str).str.upper().str.strip() == "GAME ANALYSIS"].copy()
+    if df_analysis.empty:
+        st.info("Aucune donnée GAME ANALYSIS.")
+        st.stop()
+    
+    # 2) Sélecteur
+    games = sorted(df_analysis["Jour"].dropna().unique())
+    sel_game = st.selectbox("Choisissez un match", games, index=len(games)-1)
+    df_game = df_analysis[df_analysis["Jour"] == sel_game].copy()
+    
+    # 3) Nettoyer AMPM
+    df_game["AMPM"] = (
+        df_game["AMPM"]
+        .astype(str)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+        .replace({"nan": np.nan, "": np.nan})
+    )
+    df_game = df_game.dropna(subset=["AMPM"])
+    
+    # 4) Colonnes numériques
+    num_cols = [
+        "Duration","M/min","M/min 15km/h",
+        "Distance 20-25km/h","Distance 25km/h","N° Sprints"
+    ]
+    for c in num_cols:
+        if c in df_game.columns:
+            df_game[c] = (
+                df_game[c]
+                .astype(str)
+                .str.replace(r"[^\d,.\-]", "", regex=True)
+                .str.replace(",", ".", regex=False)
+            )
+            df_game[c] = pd.to_numeric(df_game[c], errors="coerce")
+    
+    # 5) Colonnes dérivées
+    df_game["M/min 20-25km/h"] = df_game["Distance 20-25km/h"] / df_game["Duration"]
+    df_game["M/min >25km/h"]   = df_game["Distance 25km/h"] / df_game["Duration"]
+    df_game["Sprints/min"]     = df_game["N° Sprints"] / df_game["Duration"]
+    
+    # 6) Moyennes par période
+    metrics = ["M/min","M/min 15km/h","M/min 20-25km/h","M/min >25km/h","Sprints/min"]
+    df_mean = (
+        df_game.groupby("AMPM")[metrics]
+               .mean(numeric_only=True)
+               .reset_index()
+    )
+    
+    mt1 = ["1 MT - 1","1 MT - 2","1 MT - 3"]
+    mt2 = ["2 MT - 1","2 MT - 2","2 MT - 3"]
+    
+    def mean_halves(metric):
+        v1 = df_mean.loc[df_mean["AMPM"].isin(mt1), metric].mean(skipna=True)
+        v2 = df_mean.loc[df_mean["AMPM"].isin(mt2), metric].mean(skipna=True)
+        return v1, v2
+    
+    titles = {
+        "M/min": "M/min par période",
+        "M/min 15km/h": "M/min >15 km/h par période",
+        "M/min 20-25km/h": "M/min 20–25 km/h par période",
+        "M/min >25km/h": "M/min >25 km/h par période",
+        "Sprints/min": "Sprints / min par période",
+    }
+    
+    FCV_BLUE = "#0031E3"
+    
+    def build_fig(metric):
+        m1, m2 = mean_halves(metric)
+        subtitle = f"(moyenne 1MT : {m1:.2f} & 2MT : {m2:.2f})" if pd.notna(m1) and pd.notna(m2) else ""
+        fig = px.bar(
+            df_mean,
+            x="AMPM",
+            y=metric,
+            text=metric,
+            title=f"{titles.get(metric, metric)} {subtitle}",
+            color_discrete_sequence=[FCV_BLUE],
+        )
+        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig.update_layout(
+            showlegend=False,
+            xaxis_title="Période",
+            yaxis_title=metric,
+            height=420,
+            margin=dict(t=40, b=40, l=40, r=20),
+        )
+        return fig
+    
+    # === Layout ================================================================
+    row1 = st.columns(3)
+    for idx, metric in enumerate(["M/min","M/min 15km/h","M/min 20-25km/h"]):
+        if metric in df_mean.columns:
+            with row1[idx]:
+                st.plotly_chart(build_fig(metric), use_container_width=True)
+    
+    row2 = st.columns(2)
+    for idx, metric in enumerate(["M/min >25km/h","Sprints/min"]):
+        if metric in df_mean.columns:
+            with row2[idx]:
+                st.plotly_chart(build_fig(metric), use_container_width=True)
 
-
-    st.markdown("#### 📊 Performance athlétique joueurs")
+    st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
+    st.markdown("#### 🔋 Charge athlétique joueurs")
     
     # --- filter rows ------------------------------------------------------------
     mask_game = (
@@ -1718,7 +1821,7 @@ elif page == "Match":
     
     # --- metrics ----------------------------------------------------------------
     METRICS = [
-        "Distance","M/min","Distance 15km/h","M/min 15km/h",
+        "Distance","Distance 15km/h",
         "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
         "N° Sprints","Acc","Dec","Vmax","Distance 90% Vmax"
     ]
@@ -1736,7 +1839,7 @@ elif page == "Match":
         )
     
     # ===== 1) Build player reference from all matches ==========================
-    rate_like = {"M/min","M/min 15km/h","Vmax"}
+    rate_like = {"Vmax"}
     match_all["Duration"] = to_num(match_all["Duration"])
     
     ref_records = []
@@ -1845,97 +1948,179 @@ elif page == "Match":
     st.markdown(html, unsafe_allow_html=True)
 
 
-        
-    # --- derived metrics ---
-    if {"Distance 25km/h", "Duration"}.issubset(df.columns):
-        df["M/min Distance 25km/h"] = df.apply(
-            lambda r: round(r["Distance 25km/h"] / r["Duration"], 1)
-            if pd.notna(r["Distance 25km/h"]) and pd.notna(r["Duration"]) and r["Duration"] > 0
-            else pd.NA,
-            axis=1
+# === 📊 Intensité athlétique joueurs =========================================
+
+    st.markdown("#### 💥 Intensité athlétique joueurs")
+    
+    # 1) Colonnes de base dans match_all
+    base_cols = ["Name", "Duration", "M/min", "M/min 15km/h", "Acc", "Distance 25km/h"]
+    have = [c for c in base_cols if c in match_rows.columns]
+    df_int = match_rows[have].copy()
+    
+    # 2) Nettoyage numérique
+    for c in have:
+        if c != "Name":
+            df_int[c] = to_num(df_int[c])
+    
+    # 3) Colonnes dérivées
+    if {"Distance 25km/h", "Duration"}.issubset(df_int.columns):
+        df_int["M/min 25km/h"] = np.where(
+            (df_int["Duration"] > 0) & df_int["Distance 25km/h"].notna(),
+            (df_int["Distance 25km/h"] / df_int["Duration"]).round(1),
+            np.nan,
+        )
+    if {"Acc", "Duration"}.issubset(df_int.columns):
+        df_int["Acc/min"] = np.where(
+            (df_int["Duration"] > 0) & df_int["Acc"].notna(),
+            (df_int["Acc"] / df_int["Duration"]).round(2),
+            np.nan,
         )
     
-    if {"Acc", "Duration"}.issubset(df.columns):
-        df["Acc/min"] = df.apply(
-            lambda r: round(r["Acc"] / r["Duration"], 2)
-            if pd.notna(r["Acc"]) and pd.notna(r["Duration"]) and r["Duration"] > 0
-            else pd.NA,
-            axis=1
-        )
+    # 4) Construire le référentiel « meilleure perf » à partir de tous les matchs
+    metrics_int = ["M/min", "M/min 15km/h", "M/min 25km/h", "Acc/min"]
+    ref_records = []
+    for name, grp in match_all.groupby("Name"):
+        rec = {"Name": name}
+        g = grp.copy()
+        for c in ["M/min", "M/min 15km/h", "Distance 25km/h", "Acc"]:
+            if c in g.columns and c != "Name":
+                g[c] = to_num(g[c])
+        # dérivées dans le ref
+        if {"Distance 25km/h", "Duration"}.issubset(g.columns):
+            g["M/min 25km/h"] = np.where(
+                (g["Duration"] > 0) & g["Distance 25km/h"].notna(),
+                g["Distance 25km/h"] / g["Duration"],
+                np.nan,
+            )
+        if {"Acc", "Duration"}.issubset(g.columns):
+            g["Acc/min"] = np.where(
+                (g["Duration"] > 0) & g["Acc"].notna(),
+                g["Acc"] / g["Duration"],
+                np.nan,
+            )
+        rec["Duration"] = g["Duration"].max(skipna=True)
+        for m in metrics_int:
+            if m in g.columns:
+                rec[m] = g[m].max(skipna=True)
+        ref_records.append(rec)
     
-    intensity_cols = [c for c in ["M/min", "M/min 15km/h", "M/min Distance 25km/h", "Acc/min"] if c in df.columns]
+    ref_int = pd.DataFrame(ref_records, columns=["Name", "Duration"] + metrics_int)
+    ref_idx = ref_int.set_index("Name")
     
-    for metric in intensity_cols:
-        plot_df = df[["Name", "Duration", metric]].dropna(subset=[metric]).copy()
+    # 5) % vs référence pour le match courant
+    cols_show = ["Name", "Duration"] + [c for c in metrics_int if c in df_int.columns]
+    df_view = df_int[cols_show].copy().sort_values("Duration", ascending=False).reset_index(drop=True)
+    
+    # conversion numérique
+    for c in metrics_int + ["Duration"]:
+        if c in df_view and c != "Name":
+            df_view[c] = pd.to_numeric(df_view[c], errors="coerce")
+    
+    # % vs référence
+    for c in metrics_int:
+        if c in df_view.columns:
+            pct_col = f"{c} (%)"
+            def pct_func(row):
+                val = row.get(c)
+                ref_val = ref_idx.at[row["Name"], c] if row["Name"] in ref_idx.index else np.nan
+                if pd.notna(val) and pd.notna(ref_val) and ref_val > 0:
+                    return round(val / ref_val * 100, 1)
+                return np.nan
+            df_view[pct_col] = df_view.apply(pct_func, axis=1)
+    
+    # --- HTML avec couleurs pour tous les joueurs ---
+    header_html = "".join(f"<th>{col}</th>" for col in ["Name", "Duration"] + metrics_int)
+    rows_html = []
+    
+    for _, row in df_view.iterrows():
+        row_cells = [f"<td>{row['Name']}</td>"]
+        row_cells.append(f"<td>{int(row['Duration']) if pd.notna(row['Duration']) else ''}</td>")
+    
+        for m in metrics_int:
+            val = row.get(m)
+            pct = row.get(f"{m} (%)")
+            if pd.notna(val) and pd.notna(pct):
+                text = f"{val:.1f} ({pct:.0f}%)" if "Acc" not in m else f"{val:.2f} ({pct:.0f}%)"
+            elif pd.notna(val):
+                text = f"{val:.1f}" if "Acc" not in m else f"{val:.2f}"
+            else:
+                text = ""
+            style = ""
+            if pd.notna(pct):
+                if pct > 90:
+                    style = "background-color: lightgreen;"
+                elif pct < 85:
+                    style = "background-color: lightcoral;"
+            row_cells.append(f'<td style="{style}">{text}</td>')
+        rows_html.append(f"<tr>{''.join(row_cells)}</tr>")
+    
+    html = f"""
+    <div style="max-height:600px;overflow-y:auto;">
+    <table style="border-collapse:collapse;width:100%;font-size:12px;">
+    <thead>
+    <tr style="background:#0031E3;color:white;">{header_html}</tr>
+    </thead>
+    <tbody>
+    {''.join(rows_html)}
+    </tbody>
+    </table>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+        # 5) Bar plots
+    metrics_available = [m for m in metrics_int if m in df_int.columns]
+    
+    for metric in metrics_available:
+        plot_df = df_int[["Name", "Duration", metric]].dropna(subset=[metric]).copy()
         if plot_df.empty:
             continue
         plot_df = plot_df.sort_values(metric, ascending=False)
         plot_df["Couleur"] = np.where(plot_df["Duration"] < 40, "#CFB013", "#0031E3")
-        plot_df["Label"] = plot_df[metric].apply(
-            lambda v: f"{v:.2f}" if pd.notna(v) else ""
-        )
+        plot_df["Label"] = plot_df[metric].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "")
     
         fig_bar = px.bar(
-            plot_df,
-            x="Name",
-            y=metric,
-            color="Couleur",
-            color_discrete_map="identity",
-            text="Label",
+            plot_df, x="Name", y=metric, color="Couleur",
+            color_discrete_map="identity", text="Label",
             title=f"{metric} par joueur",
         )
         fig_bar.update_traces(textposition="outside")
         fig_bar.update_layout(
-            showlegend=False,
-            xaxis_title="Joueur",
-            yaxis_title=metric,
-            height=520,
-            margin=dict(t=40, b=40, l=40, r=20),
+            showlegend=False, xaxis_title="Joueur", yaxis_title=metric,
+            height=520, margin=dict(t=40, b=40, l=40, r=20),
         )
         st.plotly_chart(fig_bar, use_container_width=True)
-        
-
-    metrics = ["M/min", "M/min 15km/h", "M/min Distance 25km/h", "Acc/min"]
-    metrics = [m for m in metrics if m in df.columns]
     
-    Z = df[metrics].apply(lambda col: pd.Series(zscore(col, nan_policy="omit"), index=df.index))
-    names = df["Name"]
-    vers_blue = "#0031E3"
+    # 6) Z-scores
+    metrics_z = metrics_available
+    if metrics_z:
+        Z = df_int[metrics_z].apply(lambda col: pd.Series(zscore(col, nan_policy="omit"), index=df_int.index))
+        names = df_int["Name"]
+        vers_blue = "#0031E3"
     
-    def list_by_metric(metric, high=True, thr=0.9):
-        s = Z[metric].dropna()
-        sel = s[s > thr] if high else s[s < -thr]
-        if sel.empty:
-            return "- Aucun"
-        return "\n".join(f"- {names.loc[i]} ({sel.loc[i]:.2f})" for i in sel.index)
+        def list_by_metric(metric, high=True, thr=0.9):
+            s = Z[metric].dropna()
+            sel = s[s > thr] if high else s[s < -thr]
+            if sel.empty:
+                return "- Aucun"
+            return "\n".join(f"- {names.loc[i]} ({sel.loc[i]:.2f})" for i in sel.index)
     
-    high_lines = [
-        f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, high=True, thr=0.9)}"
-        for m in metrics
-    ]
-    low_lines = [
-        f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, high=False, thr=0.9)}"
-        for m in metrics
-    ]
+        high_lines = [f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, True, 0.9)}"
+                      for m in metrics_z]
+        low_lines = [f"<span style='color:{vers_blue}'>{m}</span>:<br>{list_by_metric(m, False, 0.9)}"
+                     for m in metrics_z]
     
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("<b>Performances élevées (Z &gt; 0.9)</b><br>" + "<br><br>".join(high_lines),
+                        unsafe_allow_html=True)
+        with col2:
+            st.markdown("<b>Performances basses (Z &lt; -0.9)</b><br>" + "<br><br>".join(low_lines),
+                        unsafe_allow_html=True)
     
-    with col1:
-        st.markdown(
-            "<b>Performances élevées (Z &gt; 0.9)</b><br>"
-            + "<br><br>".join(high_lines),
-            unsafe_allow_html=True,
-        )
-    
-    with col2:
-        st.markdown(
-            "<b>Performances basses (Z &lt; -0.9)</b><br>"
-            + "<br><br>".join(low_lines),
-            unsafe_allow_html=True,
-        )
-
     st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
+
+        
     # ========== 3) RÉFÉRENCE MATCH TABLE (styled) ==========
     st.subheader("🏆 Référence Match")
     
@@ -2021,7 +2206,56 @@ elif page == "Match":
     components.html(html, height=table_height + 40, scrolling=True)
 
 
-
+    st.markdown("#### 📊 Match référence – Meilleures perfs (intensité)")
+    
+    # Colonnes nécessaires dans match_all
+    need_cols = ["Name", "Duration", "M/min", "M/min 15km/h", "Distance 25km/h", "Acc"]
+    present_cols = [c for c in need_cols if c in match_all.columns]
+    ref_df = match_all[present_cols].copy()
+    
+    # nettoyage numérique
+    for c in present_cols:
+        if c != "Name":
+            ref_df[c] = to_num(ref_df[c])
+    
+    # Colonnes dérivées
+    if {"Distance 25km/h", "Duration"}.issubset(ref_df.columns):
+        ref_df["M/min 25km/h"] = np.where(
+            (ref_df["Duration"] > 0) & ref_df["Distance 25km/h"].notna(),
+            ref_df["Distance 25km/h"] / ref_df["Duration"],
+            np.nan,
+        )
+    
+    if {"Acc", "Duration"}.issubset(ref_df.columns):
+        ref_df["Acc/min"] = np.where(
+            (ref_df["Duration"] > 0) & ref_df["Acc"].notna(),
+            ref_df["Acc"] / ref_df["Duration"],
+            np.nan,
+        )
+    
+    # On garde uniquement les colonnes finales
+    metrics_best = ["M/min", "M/min 15km/h", "M/min 25km/h", "Acc/min"]
+    cols_best = ["Name"] + [c for c in metrics_best if c in ref_df.columns]
+    
+    # Meilleure perf par joueur
+    best_perf = (
+        ref_df.groupby("Name")[cols_best[1:]]  # toutes sauf Name
+              .max(min_count=1)
+              .reset_index()
+    )
+    
+    # arrondis
+    for c in ["M/min", "M/min 15km/h", "M/min 25km/h"]:
+        if c in best_perf:
+            best_perf[c] = best_perf[c].round(1)
+    if "Acc/min" in best_perf:
+        best_perf["Acc/min"] = best_perf["Acc/min"].round(2)
+    
+    # tri (exemple : M/min décroissant)
+    order_col = "M/min" if "M/min" in best_perf.columns else best_perf.columns[1]
+    best_perf = best_perf.sort_values(order_col, ascending=False).reset_index(drop=True)
+    
+    st.dataframe(best_perf, use_container_width=True)
 
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
