@@ -28,7 +28,7 @@ import matplotlib.colors as mcolors
 import plotly.graph_objects as go
 from scipy.stats import zscore
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants ───────────────────────────────────────"──────────────────────────
 
 st.set_page_config(layout='wide')
 col1, col2 = st.columns([9,1])
@@ -1603,7 +1603,6 @@ elif page == "Match":
         games.groupby("Jour", as_index=False)[num_cols].mean(numeric_only=True)
         .merge(jour_dates, on="Jour", how="left")
         .sort_values("MatchDate")
-        .tail(4)   # last 4 games
     )
 
     # --- Rounding
@@ -1763,18 +1762,28 @@ elif page == "Match":
         "Sprints/min": "Sprints / min par période",
     }
     
-    FCV_BLUE = "#0031E3"
+    # couleurs pastels demandées
+    COLOR_MAP = {
+        "M/min": "#77DD77",          # vert clair
+        "M/min 15km/h": "#FDFD96",   # jaune clair
+        "M/min 20-25km/h": "#B50909",# rouge clair / orange
+        "M/min >25km/h": "#990000",  # rouge foncé doux
+        "Sprints/min": "#555555",    # noir/gris
+    }
     
     def build_fig(metric):
         m1, m2 = mean_halves(metric)
-        subtitle = f"(moyenne 1MT : {m1:.2f} & 2MT : {m2:.2f})" if pd.notna(m1) and pd.notna(m2) else ""
+        subtitle = (
+            f"(moyenne 1MT : {m1:.2f} & 2MT : {m2:.2f})"
+            if pd.notna(m1) and pd.notna(m2) else ""
+        )
         fig = px.bar(
             df_mean,
             x="AMPM",
             y=metric,
             text=metric,
             title=f"{titles.get(metric, metric)} {subtitle}",
-            color_discrete_sequence=[FCV_BLUE],
+            color_discrete_sequence=[COLOR_MAP.get(metric, "#888888")],
         )
         fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
         fig.update_layout(
