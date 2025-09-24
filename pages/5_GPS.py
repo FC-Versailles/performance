@@ -1125,14 +1125,14 @@ elif page == "Entrainement":
     metric_cols = [c for c in df_week.columns if c not in ["Name", "Semaine"]]
     
     # 1) mean for each player inside week (sessions -> player/week)
-    agg_first = {c: "mean" for c in metric_cols}
+    agg_first = {c: "sum" for c in metric_cols}
     if "Vmax" in metric_cols:
         agg_first["Vmax"] = "max"
     
     player_week = df_week.groupby(["Semaine", "Name"], as_index=False).agg(agg_first)
     
     # 2) mean across players for each week (keep Vmax max)
-    agg_second = {c: "mean" for c in metric_cols if c != "Vmax"}
+    agg_second = {c: "sum" for c in metric_cols if c != "Vmax"}
     if "Vmax" in metric_cols:
         agg_second["Vmax"] = "max"
     
