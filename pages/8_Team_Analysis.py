@@ -578,7 +578,7 @@ targets = {
     "Goals_Diff": 0.99,
     "team_match_goals": 1.5,
     "team_match_np_xg": 1.25,
-    "team_match_passes_inside_box": 4,
+    "team_match_passes_inside_box": 3,
     "team_match_deep_progressions": 40,
     "team_match_obv": 1.6,
     "team_match_obv_shot": 0.01,
