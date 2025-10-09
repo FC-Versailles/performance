@@ -1603,23 +1603,24 @@ elif page == "Match":
         games.groupby("Jour", as_index=False)[num_cols].mean(numeric_only=True)
         .merge(jour_dates, on="Jour", how="left")
         .sort_values("MatchDate")
+        .reset_index(drop=True)            # <- important
     )
-
+    
     # --- Rounding
     for c in num_cols:
         team_mean[c] = team_mean[c].astype(float).round(2)
-
+    
     versailles_blue = "#0031E3"
     
     def highlight_last_row(row, last_index):
         return [
-            f"background-color:{versailles_blue}; color:white"
-            if row.name == last_index else ""
+            f"background-color:{versailles_blue}; color:white" if row.name == last_index else ""
             for _ in row
         ]
     
+    # vue et surlignage de la dernière journée (ex: J4 FCVB)
     df_view  = team_mean[["Jour"] + num_cols]
-    last_idx = df_view.index.max()
+    last_idx = len(df_view) - 1           # <- index de la dernière ligne visible
     
     styled = (
         df_view.style
@@ -1634,17 +1635,17 @@ elif page == "Match":
             )
     )
     
+    # Afficher d’abord le tableau par match (la dernière ligne sera bleue, ex: J4 FCVB)
     st.dataframe(styled, use_container_width=True, hide_index=True)
-
     
-    # 1) Global mean over all games
+    # Puis seulement les moyennes
     global_mean = (
         games.groupby("Jour", as_index=False)[num_cols]
              .mean(numeric_only=True)[num_cols]
-             .mean(numeric_only=True)   # mean across Jour -> mean of team
+             .mean(numeric_only=True)
              .round(2)
     )
-
+    
     # rattacher les positions
     games["Pos"] = games["Name"].str.upper().map(player_positions).fillna("NC")
     metrics = num_cols
@@ -1668,7 +1669,7 @@ elif page == "Match":
     ]
     summary = pd.DataFrame([r[1] for r in rows], index=[r[0] for r in rows]).reset_index()
     summary = summary.rename(columns={"index": "Ligne"})
-    
+
     st.write("📌 Moyenne | Postes & équipe")
     st.dataframe(summary, use_container_width=True, hide_index=True)
     
