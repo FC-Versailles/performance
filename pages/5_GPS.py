@@ -1527,8 +1527,8 @@ elif page == "Entrainement":
 # ── PAGE: MATCH ───────────────────────────────────────────────────────────────
 elif page == "Match":
     st.markdown("#### 🧮 Match | Composante athlétique")
-
-    # --- Filter only GAME rows (no Prepa / N3)
+    
+    # --- Filtre des GAME sans Prepa / N3
     games = (
         data[data["Type"].astype(str).str.upper().str.strip() == "GAME"]
         .loc[~data["Jour"].astype(str).str.lower().eq("prepa")]
@@ -1536,13 +1536,9 @@ elif page == "Match":
         .copy()
     )
     games["Date"] = pd.to_datetime(games["Date"], errors="coerce")
-
-    # --- Clean numeric columns needed for derived metrics
-    base_cols = [
-        "Duration", "M/min", "M/min 15km/h",
-        "Distance 20-25km/h", "Distance 25km/h",
-        "N° Sprints", "Acc"
-    ]
+    
+    # --- Nettoyage numérique
+    base_cols = ["Duration","M/min","M/min 15km/h","Distance 20-25km/h","Distance 25km/h","N° Sprints","Acc"]
     for c in base_cols:
         if c in games.columns:
             games[c] = (
@@ -1552,122 +1548,123 @@ elif page == "Match":
                         .replace("", pd.NA)
             )
             games[c] = pd.to_numeric(games[c], errors="coerce")
-
-    # --- Derived variables ---
-    # 1) M/min 20-25km/h
-    if {"Distance 20-25km/h", "Duration"}.issubset(games.columns):
-        games["M/min 20-25km/h"] = np.where(
-            (games["Duration"] > 0) & games["Distance 20-25km/h"].notna(),
-            games["Distance 20-25km/h"] / games["Duration"],
-            np.nan
-        )
-    # 2) M/min 25km/h  (no “Distance” word)
-    if {"Distance 25km/h", "Duration"}.issubset(games.columns):
-        games["M/min 25km/h"] = np.where(
-            (games["Duration"] > 0) & games["Distance 25km/h"].notna(),
-            games["Distance 25km/h"] / games["Duration"],
-            np.nan
-        )
-    # 3) Sprints/min
-    if {"N° Sprints", "Duration"}.issubset(games.columns):
-        games["Sprints/min"] = np.where(
-            (games["Duration"] > 0) & games["N° Sprints"].notna(),
-            games["N° Sprints"] / games["Duration"],
-            np.nan
-        )
-    # 4) Acc/min
-    if {"Acc", "Duration"}.issubset(games.columns):
-        games["Acc/min"] = np.where(
-            (games["Duration"] > 0) & games["Acc"].notna(),
-            games["Acc"] / games["Duration"],
-            np.nan
-        )
-
-    # --- One date per Jour for ordering
+    
+    # --- Dérivées
+    if {"Distance 20-25km/h","Duration"}.issubset(games.columns):
+        games["M/min 20-25km/h"] = np.where((games["Duration"]>0)&games["Distance 20-25km/h"].notna(),
+                                            games["Distance 20-25km/h"]/games["Duration"], np.nan)
+    if {"Distance 25km/h","Duration"}.issubset(games.columns):
+        games["M/min 25km/h"] = np.where((games["Duration"]>0)&games["Distance 25km/h"].notna(),
+                                         games["Distance 25km/h"]/games["Duration"], np.nan)
+    if {"N° Sprints","Duration"}.issubset(games.columns):
+        games["Sprints/min"] = np.where((games["Duration"]>0)&games["N° Sprints"].notna(),
+                                        games["N° Sprints"]/games["Duration"], np.nan)
+    if {"Acc","Duration"}.issubset(games.columns):
+        games["Acc/min"] = np.where((games["Duration"]>0)&games["Acc"].notna(),
+                                    games["Acc"]/games["Duration"], np.nan)
+    
+    # --- Une date par Jour pour l'ordre
     jour_dates = (
         games.groupby("Jour", as_index=False)["Date"]
              .min()
-             .rename(columns={"Date": "MatchDate"})
+             .rename(columns={"Date":"MatchDate"})
     )
-
-    # --- Keep only the wanted columns
-    keep_cols = [
-        "Jour", "M/min", "M/min 15km/h",
-        "M/min 20-25km/h", "M/min 25km/h",
-        "Sprints/min", "Acc/min"
-    ]
-    num_cols = [c for c in keep_cols if c != "Jour" and c in games.columns]
-
-    # --- Mean per Jour
+    
+    # --- Colonnes gardées
+    keep_cols = ["Jour","M/min","M/min 15km/h","M/min 20-25km/h","M/min 25km/h","Sprints/min","Acc/min"]
+    num_cols = [c for c in keep_cols if c!="Jour" and c in games.columns]
+    if not num_cols:
+        st.info("Aucune métrique numérique disponible.")
+        st.stop()
+    
+    # --- Moyenne par Jour + tri chronologique
     team_mean = (
         games.groupby("Jour", as_index=False)[num_cols].mean(numeric_only=True)
         .merge(jour_dates, on="Jour", how="left")
         .sort_values("MatchDate")
+        .reset_index(drop=True)
     )
-
-    # --- Rounding
+    
+    # --- Arrondi
     for c in num_cols:
         team_mean[c] = team_mean[c].astype(float).round(2)
-
+    
+    # --- Vue stylée avec dernière ligne surlignée
     versailles_blue = "#0031E3"
     
-    def highlight_last_row(row, last_index):
-        return [
-            f"background-color:{versailles_blue}; color:white"
-            if row.name == last_index else ""
-            for _ in row
-        ]
+    def highlight_last_row(row):
+        last_index = len(team_mean) - 1
+        return [f"background-color:{versailles_blue}; color:white" if row.name == last_index else "" for _ in row]
     
-    df_view  = team_mean[["Jour"] + num_cols]
-    last_idx = df_view.index.max()
-    
+    df_view = team_mean[["Jour"] + num_cols]
     styled = (
         df_view.style
-            .apply(highlight_last_row, axis=1, last_index=last_idx)
+            .apply(highlight_last_row, axis=1)
             .format({col: "{:.2f}" for col in num_cols})
             .set_table_styles(
                 [
-                    {"selector": "thead tr th", "props": [("color", "black"), ("font-weight", "bold")]},
-                    {"selector": "th.col_heading", "props": [("color", "black"), ("font-weight", "bold")]},
+                    {"selector":"thead tr th","props":[("color","black"),("font-weight","bold")]},
+                    {"selector":"th.col_heading","props":[("color","black"),("font-weight","bold")]},
                 ],
                 overwrite=True,
             )
     )
     
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-
+    # IMPORTANT: st.dataframe ne rend pas Pandas Styler. Utiliser HTML.
+    st.markdown(styled.to_html(), unsafe_allow_html=True)
     
-    # 1) Global mean over all games
+    # --- Moyenne globale (moyenne des moyennes par Jour)
     global_mean = (
         games.groupby("Jour", as_index=False)[num_cols]
              .mean(numeric_only=True)[num_cols]
-             .mean(numeric_only=True)   # mean across Jour -> mean of team
+             .mean(numeric_only=True)
              .round(2)
     )
-
-    # rattacher les positions
-    games["Pos"] = games["Name"].str.upper().map(player_positions).fillna("NC")
+    
+    # --- Rattacher positions de manière sûre
+    # Si 'player_positions' ou 'Name' absent, fallback en 'NC'
+    if "Name" in games.columns and "player_positions" in globals() and isinstance(player_positions, dict):
+        games["Pos"] = games["Name"].astype(str).str.upper().map(player_positions).fillna("NC")
+    else:
+        games["Pos"] = "NC"
+    
     metrics = num_cols
     
     def mean_for(pos):
         sub = games.loc[games["Pos"] == pos, metrics]
         return sub.mean(numeric_only=True).round(2)
     
-    mean_team = games[metrics].mean().round(2)
+    mean_team = games[metrics].mean(numeric_only=True).round(2)
     mean_dc   = mean_for("DC")
     mean_m    = mean_for("M")
     mean_pis  = mean_for("PIS")
     mean_att  = mean_for("ATT")
     
-    rows = [
-        ("Moyenne équipe", mean_team),
-        ("Moyenne DC",     mean_dc),
-        ("Moyenne M",      mean_m),
-        ("Moyenne PIS",    mean_pis),
-        ("Moyenne ATT",    mean_att),
-    ]
-    summary = pd.DataFrame([r[1] for r in rows], index=[r[0] for r in rows]).reset_index()
-    summary = summary.rename(columns={"index": "Ligne"})
+    summary = (
+        pd.DataFrame(
+            [
+                ("Moyenne équipe", mean_team),
+                ("Moyenne DC",     mean_dc),
+                ("Moyenne M",      mean_m),
+                ("Moyenne PIS",    mean_pis),
+                ("Moyenne ATT",    mean_att),
+            ],
+            columns=["Ligne","_vals"]
+        )
+        .join(pd.DataFrame(list(_.values) for _ in summary["_vals"]) if False else pd.DataFrame())  # placeholder safe
+    )
+    
+    # Remplacer le placeholder par un vrai dépliage propre des séries:
+    summary = pd.DataFrame(
+        {
+            "Ligne": ["Moyenne équipe","Moyenne DC","Moyenne M","Moyenne PIS","Moyenne ATT"],
+            **{k: [mean_team.get(k, np.nan), mean_dc.get(k, np.nan), mean_m.get(k, np.nan),
+                   mean_pis.get(k, np.nan), mean_att.get(k, np.nan)] for k in metrics}
+        }
+    ).round(2)
+    
+    st.dataframe(summary, use_container_width=True)
+
     
     st.write("📌 Moyenne | Postes & équipe")
     st.dataframe(summary, use_container_width=True, hide_index=True)
