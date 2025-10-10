@@ -114,7 +114,24 @@ def sb_events_to_df1(ev: pd.DataFrame) -> pd.DataFrame:
     })
     return out
 
+@st.cache_data(show_spinner=False)
+def load_team_match_stats(comp_id: int, season_id: int, focus_team: str, creds: dict) -> pd.DataFrame:
+    m = sb.matches(competition_id=comp_id, season_id=season_id, creds=creds)
+    m = m[m["match_status"] == "available"]
+    m = m[(m["home_team"] == focus_team) | (m["away_team"] == focus_team)]
+    if m.empty:
+        return pd.DataFrame()
+    dfs = []
+    for mid in m["match_id"].unique():
+        tms = sb.team_match_stats(int(mid), creds=creds)
+        dfs.append(tms)
+    df = pd.concat(dfs, ignore_index=True)
+    # Colonnes dérivées pour cohérence avec team_analysis
+    df["Goals_Diff"] = df["team_match_goals"] - df["team_match_goals_conceded"]
+    df["Pts"] = df["Goals_Diff"].apply(lambda gd: 3 if gd > 0 else (1 if gd == 0 else 0))
+    return df
 
+statsbomb_df = load_team_match_stats(COMP_ID, SEASON_ID, FOCUS_TEAM, CREDS)
 
 
 
@@ -478,11 +495,196 @@ def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
     )
 
     st.pyplot(fig, use_container_width=True)
+    
+# === KPI Pyramid (requires a statsbomb_df avec colonnes team_match_*) ===
+KPI_TARGETS = {
+    "Goals_Diff": 0.99,
+    "team_match_goals": 1.5,
+    "team_match_np_xg": 1.25,
+    "team_match_passes_inside_box": 4,
+    "team_match_deep_progressions": 40,
+    "team_match_obv": 1.6,
+    "team_match_obv_shot": 0.01,
+    "team_match_goals_conceded": 0.8,          # lower is better
+    "team_match_np_xg_conceded": 0.90,         # lower is better
+    "team_match_ppda": 8,                      # lower is better
+    "team_match_aggression": 0.24,
+    "team_match_fhalf_pressures": 75,
+    "team_match_obv_shot_nconceded": 0.5
+}
+
+def _kpi_check(row, targets: dict):
+    out = {}
+    for kpi, tgt in targets.items():
+        if ("conceded" in kpi) or (kpi == "team_match_ppda"):
+            out[kpi] = row.get(kpi, np.nan) <= tgt
+        else:
+            out[kpi] = row.get(kpi, np.nan) >= tgt
+    return out
+
+def _draw_kpi_pyramid(vals: dict, kpis_ok: dict):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+
+    S = 1.0
+    H = S * np.sqrt(3) / 2.0
+
+    def tri_up_base(cx, y_base, s=S):
+        h = s * np.sqrt(3) / 2.0
+        return [(cx - s/2, y_base), (cx + s/2, y_base), (cx, y_base + h)]
+
+    def tri_down_top(cx, y_top, s=S):
+        h = s * np.sqrt(3) / 2.0
+        return [(cx - s/2, y_top), (cx + s/2, y_top), (cx, y_top - h)]
+
+    EDGE_W = 0.8
+    EDGE = "#111"
+    TEXT = dict(ha="center", va="center", color="#0031E3", fontsize=9, fontweight="bold")
+
+    def fmt(x, n=2, as_int=False):
+        if x is None:
+            return "-"
+        if isinstance(x, float):
+            if np.isnan(x) or np.isinf(x):
+                return "-"
+        return f"{int(x)}" if as_int else f"{x:.{n}f}"
+
+    def col_color(k, default="lightgrey"):
+        if k is None:
+            return "white"
+        ok = kpis_ok.get(k, None)
+        if ok is None:
+            return default
+        return "#CFB013" if ok else "#B1B4B2"
+
+    def add_triangle(ax, coords, face, label=None, value=None):
+        ax.add_patch(Polygon(coords, closed=True, facecolor=face, edgecolor=EDGE, linewidth=EDGE_W, joinstyle="round"))
+        if label is not None:
+            cx = sum(p[0] for p in coords) / 3.0
+            cy = sum(p[1] for p in coords) / 3.0
+            ax.text(cx, cy, f"{label}" if value is None else f"{label}\n{value}", **TEXT)
+
+    def centers_for_row(oris):
+        xs = [0.0]
+        for i in range(1, len(oris)):
+            dx = S if oris[i-1] == oris[i] else (S/2.0)
+            xs.append(xs[-1] + dx)
+        off = (xs[0] + xs[-1]) / 2.0
+        return [x - off for x in xs]
+
+    row1 = [("Pts", None, "up", "pts")]
+    ori1 = ["up"]
+    row2 = [("Goals","team_match_goals","up","goals"),
+            ("GD","Goals_Diff","down","gd"),
+            ("GC","team_match_goals_conceded","up","goals_conceded")]
+    ori2 = ["up","down","up"]
+    row3 = [("xG","team_match_np_xg","up","xg"),
+            ("OBV Shot","team_match_obv_shot","down","obv_shot"),
+            ("OBV Shot C","team_match_obv_shot_nconceded","down","obv_shot_conceded"),
+            ("xGC","team_match_np_xg_conceded","up","xg_conceded")]
+    ori3 = ["up","down","down","up"]
+    row4 = [("PIB","team_match_passes_inside_box","up","pib"),
+            ("Deep P","team_match_deep_progressions","down","deep"),
+            ("OBV","team_match_obv","up","obv"),
+            (None,None,"down",None),
+            ("PPDA","team_match_ppda","up","ppda"),
+            ("Agg","team_match_aggression","down","aggression"),
+            ("Press","team_match_fhalf_pressures","up","pressures")]
+    ori4 = ["up","down","up","down","up","down","up"]
+
+    xs_r1, xs_r2, xs_r3, xs_r4 = map(centers_for_row, [ori1, ori2, ori3, ori4])
+
+    y_top1  = 3*H; y_base1 = y_top1 - H
+    y_top2  = y_base1; y_base2 = y_top2 - H
+    y_top3  = y_base2; y_base3 = y_top3 - H
+    y_top4  = y_base3; y_base4 = y_top4 - H
+
+    fig, ax = plt.subplots(figsize=(9, 8))
+    ax.axis("off")
+
+    label_x = min(xs_r4) - S*1.2
+    labkw = dict(ha="right", va="center", color="#0031E3", fontsize=8, fontweight="bold")
+    ax.text(label_x, (y_top1+y_base1)/2, "Points", **labkw)
+    ax.text(label_x, (y_top2+y_base2)/2, "Buts", **labkw)
+    ax.text(label_x, (y_top3+y_base3)/2, "Occasions créées\net concédées", **labkw)
+    ax.text(label_x, (y_top4+y_base4)/2, "Modèle de jeu\net Performance", **labkw)
+
+    (lab,kpi,ori,vkey) = row1[0]
+    add_triangle(ax, tri_up_base(xs_r1[0], y_base1), "white", lab, fmt(vals[vkey], as_int=True))
+
+    for (cx,(lab,kpi,ori,vkey)) in zip(xs_r2, row2):
+        coords = tri_up_base(cx, y_base2) if ori=="up" else tri_down_top(cx, y_top2)
+        face = col_color(kpi)
+        val = fmt(vals[vkey], as_int=True) if vkey in ("goals","gd","goals_conceded") else fmt(vals[vkey])
+        add_triangle(ax, coords, face, lab, val)
+
+    for (cx,(lab,kpi,ori,vkey)) in zip(xs_r3, row3):
+        coords = tri_up_base(cx, y_base3) if ori=="up" else tri_down_top(cx, y_top3)
+        face = col_color(kpi)
+        add_triangle(ax, coords, face, lab, fmt(vals[vkey]))
+
+    for (cx,(lab,kpi,ori,vkey)) in zip(xs_r4, row4):
+        coords = tri_up_base(cx, y_base4) if ori=="up" else tri_down_top(cx, y_top4)
+        face = "white" if (lab is None and kpi is None) else col_color(kpi)
+        val = fmt(vals[vkey], as_int=True) if vkey in ("pib","deep","pressures") else (fmt(vals[vkey]) if vkey else None)
+        add_triangle(ax, coords, face, lab, val)
+
+    x_min, x_max = min(xs_r4)-S, max(xs_r4)+S
+    y_min, y_max = y_base4 - 0.1*H, y_top1 + 0.1*H
+    ax.set_xlim(x_min, x_max); ax.set_ylim(y_min, y_max); ax.set_aspect("equal", adjustable="box")
+    plt.tight_layout()
+    return fig
+
+def render_kpi_pyramid_from_teamstats(statsbomb_df: pd.DataFrame, match_id: int, focus_team: str = "Versailles"):
+    if statsbomb_df.empty:
+        st.info("KPI pyramid: aucune donnée team_match_stats.")
+        return
+
+    row = statsbomb_df[(statsbomb_df["team_name"] == focus_team) &
+                       (statsbomb_df["match_id"] == match_id)]
+    if row.empty:
+        st.info("KPI pyramid: match non trouvé pour l'équipe.")
+        return
+    row = row.iloc[0].to_dict()
+
+    # tolérance de nom pour OBV shot concédé
+    obv_shot_nc = row.get("team_match_obv_shot_nconceded", row.get("team_match_obv_shot", np.nan))
+
+    vals = {
+        "pts": row.get("Pts", np.nan),
+        "gd": row.get("Goals_Diff", np.nan),
+        "goals": row.get("team_match_goals", np.nan),
+        "goals_conceded": row.get("team_match_goals_conceded", np.nan),
+        "xg": row.get("team_match_np_xg", np.nan),
+        "obv": row.get("team_match_obv", np.nan),
+        "obv_shot": row.get("team_match_obv_shot", np.nan),
+        "xg_conceded": row.get("team_match_np_xg_conceded", np.nan),
+        "obv_shot_conceded": obv_shot_nc,
+        "pib": row.get("team_match_passes_inside_box", np.nan),
+        "deep": row.get("team_match_deep_progressions", np.nan),
+        "ppda": row.get("team_match_ppda", np.nan),
+        "aggression": row.get("team_match_aggression", np.nan),
+        "pressures": row.get("team_match_fhalf_pressures", np.nan),
+    }
+
+    # validation KPI
+    kpis_ok = _kpi_check(row, KPI_TARGETS)
+
+    fig = _draw_kpi_pyramid(vals, kpis_ok)
+    st.markdown("### Pyramide des KPI")
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+
 
 # ---------- Onglets principaux ----------
 tab_equipe, tab_joueurs, tab_kpi = st.tabs(["Equipe", "Joueurs", "KPI"])
 
 with tab_equipe:
+    render_kpi_pyramid_from_teamstats(statsbomb_df, match_id, focus_team=FOCUS_TEAM)
+
+
 
     # Flux (deux mi-temps sur une figure)
     fig = plt.figure(figsize=(24, 8))
