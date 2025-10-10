@@ -277,7 +277,7 @@ fig.add_annotation(x=2, y=45, text="Cible Top 8 : 44 pts",
 # Mise à jour du layout
 fig.update_layout(
     width=1600,
-    height=900,
+    height=700,
     title=dict(
         text="Route vers le top 8 | 44 pts",
         x=0.02, xanchor="left",
@@ -325,7 +325,7 @@ fig.update_yaxes(
 )
 
 # Affichage Streamlit
-st.plotly_chart(fig, width=1600, height=900)
+st.plotly_chart(fig)
 
 
 ######################################################################################
@@ -455,8 +455,19 @@ COL_DPTS = '#CFB013'  # or
 COL_PTS  = '#0031E3'  # bleu
 
 # Plot 1: cumulative
-# Plot 1: cumulative
-st.markdown("### Dynamique de l'équipe")
+
+pts_match = df_team['Points'].mean()
+
+if pts_match > 2:
+    emoji = "🚀"
+elif pts_match > 1.5:
+    emoji = "🟢"
+elif pts_match >= 1.06:
+    emoji = "🟠"
+else:
+    emoji = "🔴"
+
+st.markdown(f"### Dynamique de l'équipe | Pts/match : {pts_match:.2f} {emoji}")
 fig1 = go.Figure()
 fig1.add_trace(go.Scatter(x=df_team.index + 1, y=df_team['cumul_xpts'],
                           mode='lines+markers',
@@ -484,16 +495,19 @@ fig1.update_layout(
 )
 
 # autoscale: no fixed range
-fig1.update_xaxes(showgrid=True, gridcolor='lightgrey')
-fig1.update_yaxes(showgrid=True, gridcolor='lightgrey')
+fig1.update_xaxes(range=[1, 32], dtick=1, showgrid=True, gridcolor='lightgrey')
+fig1.update_yaxes(range=[0, 65], dtick=5, showgrid=True, gridcolor='lightgrey')
 
 st.plotly_chart(fig1, use_container_width=True)
 
 
-# Plot 3: Luck & Perf
-st.markdown("### Performance & Points")
 mean_luck = df_team['luck'].mean()
 mean_perf = df_team['perf'].mean()
+# Plot 3: Luck & Perf
+st.markdown(
+    f"### Performance & Points | Over/under Perf : {mean_perf:.2f} & Chance : {mean_luck:.2f}"
+)
+
 max_luck = float(np.nanmax(np.abs(df_team['luck']))) if len(df_team) else 1.0
 max_perf = float(np.nanmax(np.abs(df_team['perf']))) if len(df_team) else 1.0
 max_luck = max(max_luck, 0.5)
@@ -501,10 +515,17 @@ max_perf = max(max_perf, 0.5)
 
 fig3 = go.Figure()
 fig3.add_trace(go.Scatter(
-    x=df_team['luck'], y=df_team['perf'],
-    mode='markers', marker=dict(size=12, color=COL_PTS, opacity=0.9),
-    text=df_team['Team'],
-    hovertemplate="Luck: %{x:.2f}<br>Perf: %{y:.2f}<br>Équipe: %{text}<extra></extra>",
+    x=df_team['luck'],
+    y=df_team['perf'],
+    mode='markers+text',
+    marker=dict(size=12, color=COL_PTS, opacity=0.9),
+    text=df_team['day'],  # show Game day label
+    textposition="top center",
+    hovertemplate=(
+        "Game day: %{text}<br>"
+        "Luck: %{x:.2f}<br>"
+        "Perf: %{y:.2f}<extra></extra>"
+    ),
     name="Matches"
 ))
 fig3.add_trace(go.Scatter(
@@ -520,52 +541,90 @@ fig3.add_annotation(x=2.95, y=-0.2, text="Points", showarrow=False, font=dict(si
 fig3.update_layout(title="",
                    xaxis_title="Chance", yaxis_title="Over/under perf",
                    hovermode='closest', margin=dict(l=30, r=30, t=50, b=30), height=600)
-fig3.update_xaxes(range=[-3, 3], showgrid=True, gridcolor='lightgrey')
-fig3.update_yaxes(range=[-3, 3], showgrid=True, gridcolor='lightgrey')
+
+fig3.update_xaxes(range=[-2, 2], dtick=0.5, showgrid=True, gridcolor='lightgrey')
+fig3.update_yaxes(range=[-2, 2], dtick=0.5, showgrid=True, gridcolor='lightgrey')
+
 st.plotly_chart(fig3, use_container_width=True)
 
 # Optional: quick check the probs sum to 100
 # st.write(df_team[['win prob','draw prob','lose prob','prob_sum']].head(10))
 
-# Plot 2: points per game (no rolling mean)
-# Plot 2: scatter per match (PTS, xPTS, dPTS)
-st.markdown("### Dynamique — par match")
+# === Chronology from submitted_at ===
+sub_col = next((c for c in df_team.columns if c.strip().lower() in {"submitted_at","submitted at"}), None)
+if sub_col is None:
+    st.warning("Colonne 'submitted_at' manquante.")
+    st.stop()
+df_team["submitted_at"] = pd.to_datetime(df_team[sub_col], errors="coerce")
 
+day_first_submit = (
+    df_team.groupby("day", as_index=False)["submitted_at"]
+           .min()
+           .rename(columns={"submitted_at": "day_first_submit"})
+)
+df_team = df_team.merge(day_first_submit, on="day", how="left")
+df_team["played_order"] = (
+    df_team["day_first_submit"].rank(method="dense", ascending=True).astype(int)
+)
+
+# === Deltas (valeurs) en ordre réel ===
+df_team = df_team.sort_values(["played_order","day"]).reset_index(drop=True)
+df_team["Δdpts"] = df_team["dpts"].diff()
+df_team["Δxpts"] = df_team["xpts"].diff()
+
+# === Title with mean values (Versailles blue) ===
+mean_d = df_team["Δdpts"].mean(skipna=True)
+mean_x = df_team["Δxpts"].mean(skipna=True)
+st.markdown( f"### Dynamique par match | 📈 dPTS : {mean_d:+.2f}% - xPTS : {mean_x:+.2f}%"
+)
+
+# === MM3 ===
+df_team["Points_mm3"] = df_team["Points"].rolling(3, min_periods=1).mean()
+df_team["dpts_mm3"]   = df_team["dpts"].rolling(3, min_periods=1).mean()
+df_team["xpts_mm3"]   = df_team["xpts"].rolling(3, min_periods=1).mean()
+
+# === Plot ===
 fig2 = go.Figure()
+def add_scatter(y, name, color, symbol, group):
+    fig2.add_trace(go.Scatter(
+        x=df_team["played_order"], y=df_team[y],
+        mode="markers", name=name, legendgroup=group,
+        marker=dict(color=color, size=10, opacity=0.85, symbol=symbol),
+        customdata=np.stack([df_team["day"]], axis=-1),
+        hovertemplate="Ordre joué: %{x}<br>Journée: %{customdata[0]}<br>"+name+": %{y:.2f}<extra></extra>"
+    ))
+
+add_scatter("xpts",  "xPTS (odds→prob)",       COL_XPTS, "circle",  "xpts")
+add_scatter("dpts",  "dPTS (win/draw chance)", COL_DPTS, "diamond", "dpts")
+add_scatter("Points","PTS (réels)",            COL_PTS,  "square",  "pts")
 
 fig2.add_trace(go.Scatter(
-    x=df_team['day'], y=df_team['xpts'],
-    mode='markers',
-    name='xPTS (odds→prob)',
-    marker=dict(color=COL_XPTS, size=10, opacity=0.8, symbol='circle')
+    x=df_team["played_order"], y=df_team["xpts_mm3"],
+    mode="lines", name="xPTS (MM3)", legendgroup="xpts",
+    line=dict(color=COL_XPTS, width=2)
 ))
 fig2.add_trace(go.Scatter(
-    x=df_team['day'], y=df_team['dpts'],
-    mode='markers',
-    name='dPTS (win/draw chance)',
-    marker=dict(color=COL_DPTS, size=10, opacity=0.8, symbol='diamond')
+    x=df_team["played_order"], y=df_team["dpts_mm3"],
+    mode="lines", name="dPTS (MM3)", legendgroup="dpts",
+    line=dict(color=COL_DPTS, width=2)
 ))
 fig2.add_trace(go.Scatter(
-    x=df_team['day'], y=df_team['Points'],
-    mode='markers',
-    name='PTS (réels)',
-    marker=dict(color=COL_PTS, size=10, opacity=0.9, symbol='square')
+    x=df_team["played_order"], y=df_team["Points_mm3"],
+    mode="lines", name="PTS (MM3)", legendgroup="pts",
+    line=dict(color=COL_PTS, width=2)
 ))
 
 fig2.update_layout(
-    title="",
-    xaxis_title='Match (journée)',
-    yaxis_title='Points par Match',
-    hovermode='x unified',
-    legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0),
+    xaxis_title="Ordre réel joué", yaxis_title="Points par Match",
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     margin=dict(l=30, r=20, t=50, b=30)
 )
-
-# autoscale axes
-fig2.update_xaxes(showgrid=True, gridcolor='lightgrey')
-fig2.update_yaxes(showgrid=True, gridcolor='lightgrey')
-
+fig2.update_xaxes(dtick=1, showgrid=True, gridcolor="lightgrey")
+fig2.update_yaxes(showgrid=True, gridcolor="lightgrey")
 st.plotly_chart(fig2, use_container_width=True)
+
+
 
 
 
@@ -578,7 +637,7 @@ targets = {
     "Goals_Diff": 0.99,
     "team_match_goals": 1.5,
     "team_match_np_xg": 1.25,
-    "team_match_passes_inside_box": 3,
+    "team_match_passes_inside_box": 4,
     "team_match_deep_progressions": 40,
     "team_match_obv": 1.6,
     "team_match_obv_shot": 0.01,
