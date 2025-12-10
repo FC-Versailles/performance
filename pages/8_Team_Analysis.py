@@ -222,37 +222,62 @@ greys = [
 # Création de la figure
 fig = go.Figure()
 
-# Anciennes saisons (gris ou vert)
-for idx, col in enumerate(df.columns[:-2]):
-    color = green if idx in [4,5,6,7,8] else greys[idx]
-    fig.add_trace(go.Scatter(
-        x=x_values,
-        y=df[col],
-        mode='markers',
-        marker=dict(color=color, size=8, opacity=0.4),
-        name=col,
-        showlegend=False
-    ))
+# # Anciennes saisons (gris ou vert)
+# for idx, col in enumerate(df.columns[:-2]):
+#     color = green if idx in [4,5,6,7,8] else greys[idx]
+#     fig.add_trace(go.Scatter(
+#         x=x_values,
+#         y=df[col],
+#         mode='markers',
+#         marker=dict(color=color, size=8, opacity=0.4),
+#         name=col,
+#         showlegend=False
+#     ))
 
 # Saisons clés
+
+fig.add_trace(go.Scatter(
+    x=x_values, y=df['col8'],
+    mode='markers',
+    marker=dict(color="Yellow", size=8, opacity=0.8),
+    name='59 pts'
+))
+
+
 fig.add_trace(go.Scatter(
     x=x_values, y=df['col12'],
     mode='markers',
-    marker=dict(color=dark_blue, size=10, opacity=0.2),
+    marker=dict(color=dark_blue, size=10, opacity=0.8),
     name='FCV 24/25'
 ))
 fig.add_trace(go.Scatter(
     x=x_values, y=df['col13'],
     mode='markers',
-    marker=dict(color=light_blue, size=10, opacity=0.2),
+    marker=dict(color=light_blue, size=10, opacity=0.8),
     name='FCV 23/24'
 ))
 fig.add_trace(go.Scatter(
     x=x_values, y=df['Le Mans'],
     mode='markers',
-    marker=dict(color=orange, size=10, opacity=0.2),
+    marker=dict(color=orange, size=8, opacity=0.8),
     name='Le Mans 24/25'
 ))
+
+
+fig.add_trace(go.Scatter(
+    x=x_values, y=df['Nancy'],
+    mode='markers',
+    marker=dict(color='red', size=8, opacity=0.9),
+    name='Nancy'
+))
+
+fig.add_trace(go.Scatter(
+    x=x_values, y=df['Boulogne'],
+    mode='markers',
+    marker=dict(color='green', size=8, opacity=0.9),
+    name='Boulogne'
+))
+
 fig.add_trace(go.Scatter(
     x=x_values, y=df['col14'],
     mode='markers',
@@ -273,6 +298,7 @@ fig.add_annotation(x=2.2, y=35, text="Cible maintien : 34 pts",
 fig.add_annotation(x=2, y=45, text="Cible Top 8 : 44 pts",
                    showarrow=False,
                    font=dict(size=10, color="#0031E3", family="Arial Black"))
+
 
 # Mise à jour du layout
 fig.update_layout(
