@@ -564,7 +564,7 @@ elif page == "Post-entrainement":
              "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
              "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
              "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
-             "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',,"Barbet"
+             "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet"
           
         ]
 
@@ -846,8 +846,3 @@ elif page == "Joueurs":
             st.plotly_chart(fig_pain, use_container_width=True)
     
             
-            
-            
-            
- lat         
-    
