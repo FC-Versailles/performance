@@ -136,7 +136,7 @@ if page == "Pre-entrainement":
     all_players = [
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
         "Fischer", "Kalai","Koffi","M'bone",  "Barbet",
-        "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
+        "Moussadek", "Odzoumo", "Kouassi","Renaud","Yavorsky", "Guillaume",
         "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet"
      
     ]
@@ -563,7 +563,7 @@ elif page == "Post-entrainement":
         all_players = [
              "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
              "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
-             "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
+             "Moussadek", "Odzoumo", "Kouassi","Renaud","Yavorsky", "Guillaume",
              "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet"
           
         ]
