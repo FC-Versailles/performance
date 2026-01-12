@@ -213,44 +213,117 @@ def plot_xg_cumulative(data: pd.DataFrame, team_name: str, oppo_name: str):
 
     def build_stairs(df):
         mins = [0.0]; vals = [0.0]
+        goals = []
+        cum = 0.0
+
         for _, r in df.iterrows():
             m = float(r["minute"]) + float(r["second"]) / 60.0
-            mins.append(m); vals.append(float(r["shot_statsbomb_xg"]) + vals[-1])
-        return mins, vals
+            xg = float(r["shot_statsbomb_xg"])
+            cum += xg
+            mins.append(m)
+            vals.append(cum)
 
-    min_team, xg_team = build_stairs(team_shots)
-    min_oppo, xg_oppo = build_stairs(oppo_shots)
+            if r.get("shot_outcome") == "Goal":
+                goals.append((m, cum))
+
+        return mins, vals, goals
+
+    min_team, xg_team, goals_team = build_stairs(team_shots)
+    min_oppo, xg_oppo, goals_oppo = build_stairs(oppo_shots)
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Plot cumulative xG lines
+    # --- cumulative xG lines ---
     ax.step(min_team, xg_team, where="post", linewidth=3, label=team_name, color=FOCUS_COLOR)
     ax.step(min_oppo, xg_oppo, where="post", linewidth=3, label=oppo_name, color=OPPO_COLOR)
 
-    # Annotate final values
-    if len(min_team) > 0:
-        ax.text(min_team[-1]+1, xg_team[-1], f"{xg_team[-1]:.2f}", 
-                color=FOCUS_COLOR, fontsize=11, va="center", fontweight="bold")
-    if len(min_oppo) > 0:
-        ax.text(min_oppo[-1]+1, xg_oppo[-1], f"{xg_oppo[-1]:.2f}", 
-                color=OPPO_COLOR, fontsize=11, va="center", fontweight="bold")
-
-    # Style
-    ymax = max(xg_team[-1] if xg_team else 0, xg_oppo[-1] if xg_oppo else 0) + 0.5
+    # --- compute y limits BEFORE placing texts ---
+    ymax = max(xg_team[-1] if xg_team else 0, xg_oppo[-1] if xg_oppo else 0) + 0.6
     ax.set_ylim(0, ymax)
     ax.set_xlim(0, 95)
 
+    # --- xG diff every 15 minutes (team_name - oppo_name) ---
+    shots15 = events_shots.copy()
+    shots15["m"] = (
+        pd.to_numeric(shots15["minute"], errors="coerce").fillna(0)
+        + pd.to_numeric(shots15["second"], errors="coerce").fillna(0) / 60.0
+    )
+
+    if "shot_type" in shots15.columns:
+        shots15 = shots15[shots15["shot_type"].ne("Penalty")].copy()
+
+    shots15["bin15"] = (shots15["m"] // 15).astype(int) * 15
+    bins_keep = [0, 15, 30, 45, 60, 75, 90]
+    shots15 = shots15[shots15["bin15"].isin(bins_keep)].copy()
+
+    g = (
+        shots15.groupby(["bin15", "team"])["shot_statsbomb_xg"]
+        .sum()
+        .unstack("team")
+        .fillna(0.0)
+    )
+    for t in [team_name, oppo_name]:
+        if t not in g.columns:
+            g[t] = 0.0
+
+    g = g.sort_index()
+    diff = g[team_name] - g[oppo_name]
+
+    # --- place ΔxG texts at the correct x positions (bin centers) ---
+    y_text = ymax - 0.03 * ymax  # small offset under the top
+
+    for b in g.index:
+        val = float(diff.loc[b])
+        if not np.isfinite(val):
+            continue
+
+        x_pos = b + 7.5  # center of the 15-min window
+        txt = f"+{val:.2f}" if val >= 0 else f"{val:.2f}"
+        col = FOCUS_COLOR if val >= 0 else OPPO_COLOR
+
+        ax.text(
+            x_pos, y_text,
+            txt,
+            ha="center",
+            va="top",
+            fontsize=10,
+            fontweight="bold",
+            color=col
+        )
+
+    # --- goal markers (font-safe) ---
+    for m, y in goals_team:
+        ax.scatter([m], [y], s=180, marker="o",
+                   edgecolors="white", linewidths=1.5,
+                   color=FOCUS_COLOR, zorder=6)
+
+    for m, y in goals_oppo:
+        ax.scatter([m], [y], s=180, marker="o",
+                   edgecolors="black", linewidths=1.5,
+                   color=OPPO_COLOR, zorder=6)
+
+    # --- annotate final values ---
+    if len(min_team) > 0:
+        ax.text(min_team[-1] + 1, xg_team[-1], f"{xg_team[-1]:.2f}",
+                color=FOCUS_COLOR, fontsize=11, va="center", fontweight="bold")
+    if len(min_oppo) > 0:
+        ax.text(min_oppo[-1] + 1, xg_oppo[-1], f"{xg_oppo[-1]:.2f}",
+                color=OPPO_COLOR, fontsize=11, va="center", fontweight="bold")
+
+    # --- styling ---
     ax.set_xticks([0, 15, 30, 45, 60, 75, 90])
-    ax.set_xlabel("Minute")
+    ax.set_xlabel("Minutes")
     ax.set_ylabel("xG cumulés")
 
-    # Beautify
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(True, color="lightgrey", lw=0.8, linestyle="--", alpha=0.6)
+    ax.legend(loc="lower right")
 
-    ax.legend(loc="upper right")
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+
 
 def plot_shot_map_combined(events: pd.DataFrame, team1: str, team2: str):
     # Build (x,y, outcome, player) from SB events
@@ -263,24 +336,84 @@ def plot_shot_map_combined(events: pd.DataFrame, team1: str, team2: str):
     shots["outcome_name"] = shots.get("shot_outcome", np.nan)
     shots["xg"] = shots.get("shot_statsbomb_xg", 0.0).fillna(0.0)
 
+    # --- NEW: uplift col for color (Versailles only) ---
+    uplift_col = "shot_shot_execution_xg_uplift"
+    if uplift_col in shots.columns:
+        shots["uplift"] = pd.to_numeric(shots[uplift_col], errors="coerce")
+    else:
+        shots["uplift"] = np.nan
+
+    # --- NEW: Versailles legend stats (team1 only) ---
+    # total shots / "on target" (shot_outcome != "Off T") + inside box + xG per player
+    v = shots[shots["team_name"] == team1].copy()
+    total_shots = int(len(v))
+
+    on_target = v["outcome_name"].notna() & (v["outcome_name"] != "Off T")
+    n_on_target = int(on_target.sum())
+
+    in_box = (v["x"].between(102, 120)) & (v["y"].between(18, 62))
+    n_in_box = int(in_box.sum())
+
+    xg_by_player = (
+        v.groupby("player_name")["xg"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+    # keep legend compact
+    top_n = 10
+    xg_lines = [f"{p}: {val:.2f}" for p, val in xg_by_player.head(top_n).items()]
+    if len(xg_by_player) > top_n:
+        xg_lines.append("…")
+
+    legend_text = (
+        f"{team1}\n"
+        f"Shots: {total_shots} | On target: {n_on_target}\n"
+        f"Inside box: {n_in_box}\n"
+        f"xG by player:\n" + "\n".join(xg_lines)
+    )
+
+    # --- NEW: color mapping for uplift (team1 only) ---
+    # If uplift missing, fallback to 0 (neutral color)
+    v_uplift = v["uplift"].copy()
+    if v_uplift.notna().sum() == 0:
+        vmax = 1.0
+    else:
+        vmax = np.nanpercentile(np.abs(v_uplift.dropna()), 98)
+        vmax = float(vmax) if (vmax and np.isfinite(vmax) and vmax > 0) else 1.0
+
+    norm = mpl.colors.TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+    cmap = plt.get_cmap("RdYlGn")  # red negative, green positive
+
     # Create pitch canvas
     pitch = Pitch(pitch_type="statsbomb", line_color="black")
-    fig, ax = pitch.grid(grid_height=0.92, title_height=0.06, axis=False,
+    fig, ax = pitch.grid(grid_height=0.92, title_height=0.01, axis=False,
                          endnote_height=0.02, title_space=0, endnote_space=0)
     axp = ax["pitch"]
 
-    # Team1 shots (left→right)
+    # Team1 shots (left→right)  --- CHANGED: color by uplift, goals only annotated ---
     mask_t1 = shots["team_name"] == team1
-    df_t1 = shots.loc[mask_t1, ["x","y","outcome_name","player_name","xg"]]
+    df_t1 = shots.loc[mask_t1, ["x","y","outcome_name","player_name","xg","uplift"]]
     for _, r in df_t1.iterrows():
         is_goal = r["outcome_name"] == "Goal"
         s = 600 * float(r["xg"]) if r["xg"] > 0 else 120  # minimum visible size
-        pitch.scatter(r["x"], r["y"], alpha=1.0 if is_goal else 0.25,
-                      s=s, color=FOCUS_COLOR, edgecolors="white", linewidths=0.7, ax=axp, zorder=3)
-        if is_goal:
-            pitch.annotate(str(r["player_name"]), (r["x"]+1, r["y"]-2), ax=axp, fontsize=10, color=FOCUS_COLOR)
 
-    # Team2 shots mirrored to attack left→right
+        u = r["uplift"]
+        if pd.isna(u):
+            u = 0.0
+        col = cmap(norm(float(u)))
+
+        pitch.scatter(
+            r["x"], r["y"],
+            alpha=1.0 if is_goal else 0.25,
+            s=s, color=col,
+            edgecolors="white", linewidths=0.7,
+            ax=axp, zorder=3
+        )
+        if is_goal:
+            pitch.annotate(str(r["player_name"]), (r["x"]+1, r["y"]-2),
+                           ax=axp, fontsize=10, color="black")
+
+    # Team2 shots mirrored to attack left→right (unchanged styling)
     mask_t2 = shots["team_name"] == team2
     df_t2 = shots.loc[mask_t2, ["x","y","outcome_name","player_name","xg"]]
     for _, r in df_t2.iterrows():
@@ -292,8 +425,24 @@ def plot_shot_map_combined(events: pd.DataFrame, team1: str, team2: str):
         if is_goal:
             pitch.annotate(str(r["player_name"]), (mx+1, my-2), ax=axp, fontsize=10, color=OPPO_COLOR)
 
-    fig.suptitle(f"{team1} vs {team2}", fontsize=18, y=0.98)
+    # --- NEW: legend box for team1 (Versailles) ---
+    axp.text(
+        0.7, 0.88,
+        legend_text,
+        transform=axp.transAxes,
+        ha="center", va="top",
+        fontsize=10,
+        bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="black", alpha=0.9)
+    )
+
+    # --- NEW: colorbar for uplift (team1) ---
+    sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axp, fraction=0.03, pad=0.02)
+    cbar.set_label("Sous/sur Performance")
+
     st.pyplot(fig, use_container_width=True)
+
 
 
 
@@ -349,10 +498,153 @@ def plot_obv_kde(events: pd.DataFrame, team_name: str, bw: float = 0.3):
         cmap="RdYlGn", vmin=-vmax, vmax=vmax, alpha=0.85, aspect="auto"
     )
     plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02).set_label("OBV (green = +)")
-    ax.set_title(f"OBV KDE • {team_name}", fontsize=14, fontweight="bold")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     st.pyplot(fig, use_container_width=True)
+
+
+
+import matplotlib as mpl
+
+def plot_progressive_threat_obv(
+    events: pd.DataFrame,
+    team_name: str,
+    min_gain_pct: float = 0.25,   # 25%
+):
+    """
+    Progressive actions (Pass, Carry) for `team_name`:
+      progressive if distance-to-goal decreases by >= min_gain_pct of starting distance
+      goal center = (120,40)
+
+    EXTRA:
+      - Exclude actions that FINISH in the last third (x >= 90)
+      - Label each arrow with the player name (near the end point)
+
+    Plot:
+      - Pass: full arrow
+      - Carry: dashed arrow
+      - Arrow color = obv_total_net (RdYlGn, red=negative, green=positive)
+      - Exclude incomplete passes (pass_outcome not null)
+    """
+    if "obv_total_net" not in events.columns:
+        st.info("OBV column not available.")
+        return
+
+    GOAL_X, GOAL_Y = 120.0, 40.0
+
+    def _xy(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            return float(v[0]), float(v[1])
+        return np.nan, np.nan
+
+    def dist_to_goal(x, y):
+        return np.sqrt((GOAL_X - x) ** 2 + (GOAL_Y - y) ** 2)
+
+    # --- base filter team + types ---
+    df = events[
+        (events["team"] == team_name) &
+        (events["type"].isin(["Pass", "Carry"]))
+    ].copy()
+
+    if df.empty:
+        st.info("No Pass/Carry events for this team.")
+        return
+
+    # --- build start/end coords ---
+    df["sx"], df["sy"] = zip(*df["location"].map(_xy))
+
+    df["end_loc"] = np.where(df["type"].eq("Pass"), df["pass_end_location"], df["carry_end_location"])
+    df["ex"], df["ey"] = zip(*df["end_loc"].map(_xy))
+
+    # remove invalid coords / OBV
+    df = df.dropna(subset=["sx","sy","ex","ey","obv_total_net"])
+
+    # remove incomplete passes
+    if "pass_outcome" in df.columns:
+        df = df[~((df["type"] == "Pass") & (df["pass_outcome"].notna()))].copy()
+
+    # --- EXCLUDE actions that finish in last third (x >= 90) ---
+    df = df[df["ex"] < 90].copy()
+
+    if df.empty:
+        st.info("No Pass/Carry events left after excluding actions ending in last third.")
+        return
+
+    # --- progressive definition (>= 25% gain toward goal) ---
+    d0 = dist_to_goal(df["sx"].to_numpy(), df["sy"].to_numpy())
+    d1 = dist_to_goal(df["ex"].to_numpy(), df["ey"].to_numpy())
+    gain_pct = (d0 - d1) / np.maximum(d0, 1e-6)
+    df = df[gain_pct >= min_gain_pct].copy()
+
+    if df.empty:
+        st.info("No progressive (>=25% gain) passes/carries found (after last-third exclusion).")
+        return
+
+    # --- player label ---
+    # prefer 'player' (events df) else try 'player_name'
+    if "player" in df.columns:
+        df["player_label"] = df["player"].astype(str)
+    elif "player_name" in df.columns:
+        df["player_label"] = df["player_name"].astype(str)
+    else:
+        df["player_label"] = "?"
+
+    # --- color mapping by OBV ---
+    vmax = np.nanpercentile(np.abs(df["obv_total_net"]), 98)
+    vmax = float(vmax) if (vmax and np.isfinite(vmax)) else 1.0
+    norm = mpl.colors.TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+    cmap = plt.get_cmap("RdYlGn")
+
+    # --- plot pitch ---
+    fig, ax = plt.subplots(figsize=(12, 8))
+    pitch = Pitch(pitch_type="statsbomb", line_color="black")
+    pitch.draw(ax=ax)
+
+    # last-third line for context (x=90)
+    ax.axvline(90, color="black", lw=1.5, ls="--", alpha=0.6)
+
+    # --- draw arrows + labels ---
+    for _, r in df.iterrows():
+        col = cmap(norm(float(r["obv_total_net"])))
+        ls = "-" if r["type"] == "Pass" else "--"
+
+        pitch.arrows(
+            r["sx"], r["sy"], r["ex"], r["ey"],
+            ax=ax, color=col,
+            width=2.2, headwidth=4.5, headlength=4.5,
+            alpha=0.95, linestyle=ls
+        )
+
+        # label near end point (small offset to reduce overlap)
+        ax.text(
+            r["ex"] + 0.8,
+            r["ey"] + 0.8,
+            r["player_label"],
+            fontsize=8,
+            color="black",
+            ha="left",
+            va="bottom",
+            zorder=20
+        )
+
+    # colorbar
+    sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
+
+    n_pass = int((df["type"] == "Pass").sum())
+    n_carry = int((df["type"] == "Carry").sum())
+
+    ax.set_title(
+        
+        f"Passes: {n_pass} | Carries: {n_carry}",
+        fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
 
 
 @st.cache_data(show_spinner=False)
@@ -452,7 +744,7 @@ def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
 
     x_col = "shot_shot_execution_xg_uplift"
     y_col = "shot_statsbomb_xg"
-    shots = shots.dropna(subset=[x_col, y_col, "team", "shot_outcome"])
+    shots = shots.dropna(subset=[x_col, y_col, "team", "shot_outcome", "player", "minute"])
 
     fig, ax = plt.subplots(figsize=(9, 7), facecolor="white")
 
@@ -464,6 +756,7 @@ def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
         sub = shots[shots["team"] == team]
         if sub.empty:
             continue
+
         goals = sub[sub["shot_outcome"] == "Goal"]
         others = sub[sub["shot_outcome"] != "Goal"]
 
@@ -476,11 +769,27 @@ def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
             s=90, c=color, marker="s", edgecolor="black", lw=0.8, label=f"{team} goals"
         )
 
-    ax.set_xlabel("PsxG", fontsize=12)
-    ax.set_ylabel("xG", fontsize=12)
-    ax.set_title("Shots: PsxG vs xG", fontsize=14, weight="bold")
+        # --- NEW: conditional annotations ---
+        to_label = sub[
+            (sub[x_col] < -0.10) | (sub[y_col] > 0.20)
+        ]
 
-    # axis style
+        for _, r in to_label.iterrows():
+            label = f"{r['player']} {int(r['minute'])}'"
+            ax.annotate(
+                label,
+                (r[x_col], r[y_col]),
+                xytext=(5, 5),
+                textcoords="offset points",
+                fontsize=7,
+                color="black",
+                ha="left",
+                va="bottom"
+            )
+
+    ax.set_xlabel("PSxG (sous / sur-performance)", fontsize=6)
+    ax.set_ylabel("xG", fontsize=6)
+
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_position(("data", 0))
@@ -489,12 +798,13 @@ def plot_shot_scatter(events: pd.DataFrame, team1: str, team2: str):
 
     ax.legend(
         frameon=False,
-        fontsize=9,
+        fontsize=6,
         loc="lower right",
         bbox_to_anchor=(1, 0)
     )
 
     st.pyplot(fig, use_container_width=True)
+
     
 # === KPI Pyramid (requires a statsbomb_df avec colonnes team_match_*) ===
 KPI_TARGETS = {
@@ -676,15 +986,382 @@ def render_kpi_pyramid_from_teamstats(statsbomb_df: pd.DataFrame, match_id: int,
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
+# ---------- Graphiques Equipe ----------
+def plot_entrees_zone(
+    events: pd.DataFrame,
+    focus_team: str = "Versailles",
+    title: str = "",
+    x_min: float = 102, x_max: float = 120,
+    y_min: float = 18,  y_max: float = 62,
+):
+    """
+    Generic entries plot (Regular Play + possession_team==focus_team)
+    - Pass (complete): black arrow if pass_end_location inside zone
+    - Carry: blue arrow if carry_end_location inside zone
+    - Arrow start = location
+    Legends:
+      1) Passes (N) / Conduites (N) with colors
+      2) Players: (Total entries) (Pass+Carry)
+    """
+    def _xy(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            return float(v[0]), float(v[1])
+        return np.nan, np.nan
+
+    def _in_zone(x, y):
+        return (x >= x_min) and (x <= x_max) and (y >= y_min) and (y <= y_max)
+
+    # --- filters: Regular Play + possession_team == focus_team ---
+    df = events.copy()
+    df = df[(df.get("play_pattern") == "Regular Play") & (df.get("possession_team") == focus_team)]
+
+    # --- PASS entries ---
+    passes = df[df["type"] == "Pass"].copy()
+    if "pass_outcome" in passes.columns:
+        passes = passes[passes["pass_outcome"].isna()].copy()
+
+    passes["sx"], passes["sy"] = zip(*passes["location"].map(_xy))
+    passes["ex"], passes["ey"] = zip(*passes["pass_end_location"].map(_xy))
+    passes = passes.dropna(subset=["sx","sy","ex","ey"])
+    passes = passes[passes.apply(lambda r: _in_zone(r["ex"], r["ey"]), axis=1)]
+    passes["player_name"] = passes.get("player").astype(str)
+
+    # --- CARRY entries ---
+    carries = df[df["type"] == "Carry"].copy()
+    carries["sx"], carries["sy"] = zip(*carries["location"].map(_xy))
+    carries["ex"], carries["ey"] = zip(*carries["carry_end_location"].map(_xy))
+    carries = carries.dropna(subset=["sx","sy","ex","ey"])
+    carries = carries[carries.apply(lambda r: _in_zone(r["ex"], r["ey"]), axis=1)]
+    carries["player_name"] = carries.get("player").astype(str)
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    pitch = Pitch(pitch_type="statsbomb", line_color="black")
+    pitch.draw(ax=ax)
+
+    # highlight zone
+    from matplotlib.patches import Rectangle
+    ax.add_patch(Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
+                           fill=False, lw=2, ec="black", alpha=0.5))
+
+    # draw arrows
+    if not passes.empty:
+        pitch.arrows(
+            passes["sx"], passes["sy"], passes["ex"], passes["ey"],
+            ax=ax, color="black", width=2.0, headwidth=4, headlength=4, alpha=0.9
+        )
+    if not carries.empty:
+        pitch.arrows(
+            carries["sx"], carries["sy"], carries["ex"], carries["ey"],
+            ax=ax, color=FOCUS_COLOR, width=2.0, headwidth=4, headlength=4, alpha=0.9
+        )
+
+    # legends
+    from matplotlib.lines import Line2D
+    n_pass = int(len(passes))
+    n_carry = int(len(carries))
+
+    handles_type = [
+        Line2D([0], [0], color="black", lw=3),
+        Line2D([0], [0], color=FOCUS_COLOR, lw=3),
+    ]
+    labels_type = [
+        f"Passes vers zone ({n_pass})",
+        f"Conduites vers zone ({n_carry})",
+    ]
+    leg1 = ax.legend(handles_type, labels_type, frameon=True, loc="upper center", fontsize=6)
+    ax.add_artist(leg1)
+
+    entries_all = pd.concat(
+        [passes[["player_name"]], carries[["player_name"]]],
+        ignore_index=True
+    )
+    if not entries_all.empty:
+        counts = (
+            entries_all.groupby("player_name")
+            .size()
+            .sort_values(ascending=False)
+        )
+        TOP_N = 15
+        handles_players = [Line2D([0], [0], color="none") for _ in range(min(TOP_N, len(counts)))]
+        labels_players = [f"{p} : ({int(n)})" for p, n in counts.head(TOP_N).items()]
+
+        ax.legend(
+            handles_players,
+            labels_players,
+            frameon=False,
+            loc="upper left",
+            bbox_to_anchor=(0.15, 0.92),
+            fontsize=6,
+
+        )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+
+def plot_entrees_surface(events: pd.DataFrame, focus_team: str = "Versailles"):
+    return plot_entrees_zone(
+        events,
+        focus_team=focus_team,
+        x_min=102, x_max=120, y_min=18, y_max=62
+    )
+
+
+def plot_entrees_last_third(events: pd.DataFrame, focus_team: str = "Versailles"):
+    """
+    Entrées dans le dernier tiers (x 90→120, y 0→80)
+    - Regular Play + possession_team == Versailles
+    - Pass (complete): black arrows
+    - Carry: blue arrows
+    - If start location already in last third -> SAME arrow but colored YELLOW (both pass & carry)
+    - REMOVE actions that FINISH in the surface/box (x 102→120, y 18→62)
+
+    Legends:
+      1) Passes (outside->in) / Conduites (outside->in) + Actions (inside->inside)
+      2) Players: (Total entries)
+    """
+    # last third
+    x_min, x_max = 90, 120
+    y_min, y_max = 0, 80
+
+    # penalty box / surface area (StatsBomb)
+    box_x_min, box_x_max = 102, 120
+    box_y_min, box_y_max = 18, 62
+
+    def _xy(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            return float(v[0]), float(v[1])
+        return np.nan, np.nan
+
+    def _in_last_third(x, y):
+        return (x_min <= x <= x_max) and (y_min <= y <= y_max)
+
+    def _in_box(x, y):
+        return (box_x_min <= x <= box_x_max) and (box_y_min <= y <= box_y_max)
+
+    # --- base filters ---
+    df = events.copy()
+    df = df[(df.get("play_pattern") == "Regular Play") & (df.get("possession_team") == focus_team)]
+
+    # --- PASS entries ---
+    passes = df[df["type"] == "Pass"].copy()
+    if "pass_outcome" in passes.columns:
+        passes = passes[passes["pass_outcome"].isna()].copy()
+
+    passes["sx"], passes["sy"] = zip(*passes["location"].map(_xy))
+    passes["ex"], passes["ey"] = zip(*passes["pass_end_location"].map(_xy))
+    passes = passes.dropna(subset=["sx", "sy", "ex", "ey"])
+
+    # keep only actions that END in last third
+    passes = passes[passes.apply(lambda r: _in_last_third(r["ex"], r["ey"]), axis=1)]
+    # remove actions that END in the box
+    passes = passes[~passes.apply(lambda r: _in_box(r["ex"], r["ey"]), axis=1)]
+
+    passes["start_in_zone"] = passes.apply(lambda r: _in_last_third(r["sx"], r["sy"]), axis=1)
+    passes["player_name"] = passes.get("player").astype(str)
+
+    # --- CARRY entries ---
+    carries = df[df["type"] == "Carry"].copy()
+    carries["sx"], carries["sy"] = zip(*carries["location"].map(_xy))
+    carries["ex"], carries["ey"] = zip(*carries["carry_end_location"].map(_xy))
+    carries = carries.dropna(subset=["sx", "sy", "ex", "ey"])
+
+    carries = carries[carries.apply(lambda r: _in_last_third(r["ex"], r["ey"]), axis=1)]
+    carries = carries[~carries.apply(lambda r: _in_box(r["ex"], r["ey"]), axis=1)]
+
+    carries["start_in_zone"] = carries.apply(lambda r: _in_last_third(r["sx"], r["sy"]), axis=1)
+    carries["player_name"] = carries.get("player").astype(str)
+
+    # split by start location
+    pass_out_in  = passes[~passes["start_in_zone"]].copy()
+    pass_in_in   = passes[ passes["start_in_zone"]].copy()
+    carry_out_in = carries[~carries["start_in_zone"]].copy()
+    carry_in_in  = carries[ carries["start_in_zone"]].copy()
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    pitch = Pitch(pitch_type="statsbomb", line_color="black")
+    pitch.draw(ax=ax)
+
+    # highlight last third
+    from matplotlib.patches import Rectangle
+    ax.add_patch(Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
+                           fill=False, lw=1, ec="black", alpha=0.5))
+
+    # draw arrows
+    if not pass_out_in.empty:
+        pitch.arrows(pass_out_in["sx"], pass_out_in["sy"], pass_out_in["ex"], pass_out_in["ey"],
+                     ax=ax, color="black", width=2.0, headwidth=4, headlength=4, alpha=0.9)
+    if not carry_out_in.empty:
+        pitch.arrows(carry_out_in["sx"], carry_out_in["sy"], carry_out_in["ex"], carry_out_in["ey"],
+                     ax=ax, color=FOCUS_COLOR, width=2.0, headwidth=4, headlength=4, alpha=0.9)
+
+    # inside->inside = YELLOW
+    if not pass_in_in.empty:
+        pitch.arrows(pass_in_in["sx"], pass_in_in["sy"], pass_in_in["ex"], pass_in_in["ey"],
+                     ax=ax, color="#FFD400", width=2.0, headwidth=4, headlength=4, alpha=0.95)
+    if not carry_in_in.empty:
+        pitch.arrows(carry_in_in["sx"], carry_in_in["sy"], carry_in_in["ex"], carry_in_in["ey"],
+                     ax=ax, color="#FFD400", width=2.0, headwidth=4, headlength=4, alpha=0.95)
+
+    # legends
+    from matplotlib.lines import Line2D
+    handles_type = [
+        Line2D([0], [0], color="black", lw=3),
+        Line2D([0], [0], color=FOCUS_COLOR, lw=3),
+        Line2D([0], [0], color="#FFD400", lw=3),
+    ]
+    labels_type = [
+        f"Passes vers dernier tiers ({len(pass_out_in)})",
+        f"Conduites vers dernier tiers ({len(carry_out_in)})",
+        f"Actions dans dernier tiers ({len(pass_in_in) + len(carry_in_in)})",
+    ]
+    leg1 = ax.legend(handles_type, labels_type, frameon=True, loc="upper center", fontsize=6)
+    ax.add_artist(leg1)
+
+    # players legend (total entries, pass+carry)
+    entries_all = pd.concat([passes[["player_name"]], carries[["player_name"]]], ignore_index=True)
+    if not entries_all.empty:
+        counts = entries_all.groupby("player_name").size().sort_values(ascending=False)
+        TOP_N = 15
+        handles_players = [Line2D([0], [0], color="none") for _ in range(min(TOP_N, len(counts)))]
+        labels_players = [f"{p} : ({int(n)})" for p, n in counts.head(TOP_N).items()]
+        ax.legend(
+            handles_players,
+            labels_players,
+            frameon=False,
+            loc="upper left",
+            bbox_to_anchor=(0.15, 0.92),
+            fontsize=6,
+        )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+ 
+
+
+
+
+def plot_possession_versailles_only(events: pd.DataFrame, focus_team: str, opposition: str):
+    """
+    Plot only Versailles possession %:
+      - Bars for H1 0-15, H1 15-30, H1 30-45, H2 0-15, H2 15-30, H2 30-45
+      - Uses duration + possession_team
+      - Text: possession % for full game + by half
+    """
+    needed = {"duration", "possession_team", "period", "minute"}
+    miss = [c for c in needed if c not in events.columns]
+    if miss:
+        st.info(f"Missing columns for possession time: {miss}")
+        return
+
+    df = events.copy()
+    df = df[df["possession_team"].isin([focus_team, opposition])].copy()
+
+    df["dur_s"] = pd.to_numeric(df["duration"], errors="coerce").fillna(0.0).clip(lower=0)
+    df["minute"] = pd.to_numeric(df["minute"], errors="coerce").fillna(0).astype(int)
+    df["period"] = pd.to_numeric(df["period"], errors="coerce").fillna(0).astype(int)
+
+    # minute within half
+    base_min = df.groupby("period")["minute"].transform("min")
+    df["min_in_half"] = (df["minute"] - base_min).clip(lower=0)
+
+    # 15-min bins inside each half
+    df["bin15"] = (df["min_in_half"] // 15) * 15
+    df = df[df["bin15"].isin([0, 15, 30])].copy()
+
+    # --- % possession full match + halves ---
+    total_game = df.groupby("possession_team")["dur_s"].sum()
+    game_total = float(total_game.sum())
+    v_game = float(total_game.get(focus_team, 0.0))
+    v_game_pct = 100 * v_game / game_total if game_total > 0 else np.nan
+
+    half_team = df.groupby(["period", "possession_team"])["dur_s"].sum().unstack("possession_team").fillna(0.0)
+    for t in [focus_team, opposition]:
+        if t not in half_team.columns:
+            half_team[t] = 0.0
+    half_team["total"] = half_team[focus_team] + half_team[opposition]
+    v_h1_pct = 100 * float(half_team.loc[1, focus_team]) / float(half_team.loc[1, "total"]) if (1 in half_team.index and half_team.loc[1, "total"] > 0) else np.nan
+    v_h2_pct = 100 * float(half_team.loc[2, focus_team]) / float(half_team.loc[2, "total"]) if (2 in half_team.index and half_team.loc[2, "total"] > 0) else np.nan
+
+    # --- segment possession (Versailles % per 15-min bin) ---
+    seg = (
+        df.groupby(["period", "bin15", "possession_team"])["dur_s"]
+        .sum()
+        .unstack("possession_team")
+        .fillna(0.0)
+        .reset_index()
+        .sort_values(["period", "bin15"])
+    )
+    for t in [focus_team, opposition]:
+        if t not in seg.columns:
+            seg[t] = 0.0
+    seg["total"] = seg[focus_team] + seg[opposition]
+    seg["v_pct"] = 100 * seg[focus_team] / seg["total"].replace(0, np.nan)
+
+    seg["label"] = seg["period"].map({1: "H1", 2: "H2"}).fillna("P?") + " " + seg["bin15"].map({
+        0: "0–15", 15: "15–30", 30: "30–45"
+    })
+
+    # --- text summary ---
+    st.markdown(
+        f"**Possession FCV :** "
+        f"{v_game_pct:.1f}% sur le match | "
+        f"H1: {v_h1_pct:.1f}% & H2: {v_h2_pct:.1f}%"
+    )
+
+    # --- plot (only Versailles possession %) ---
+    # --- plot (only Versailles possession %) ---
+    fig, ax = plt.subplots(figsize=(12, 4))
+    
+    x = np.arange(len(seg))
+    values = seg["v_pct"].to_numpy()
+    
+    bars = ax.bar(x, values, color="#0031E3")
+    
+    # labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        if np.isnan(height):
+            continue
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            min(height + 1, 99),     # avoid going above 100
+            f"{height:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="black"
+        )
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels(seg["label"])
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("% possession")
+    
+    # 50% benchmark (correct for possession)
+    ax.axhline(y=50, ls="--", lw=0.5, color="black", alpha=0.1)
+    
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+    
+
+
 
 
 # ---------- Onglets principaux ----------
-tab_equipe, tab_joueurs, tab_kpi = st.tabs(["Equipe", "Joueurs", "KPI"])
+tab_equipe, tab_joueurs, tab_kpi = st.tabs(["Match", "Joueurs", "KPI"])
 
 with tab_equipe:
-    render_kpi_pyramid_from_teamstats(statsbomb_df, match_id, focus_team=FOCUS_TEAM)
-
-
 
     # Flux (deux mi-temps sur une figure)
     fig = plt.figure(figsize=(24, 8))
@@ -694,8 +1371,12 @@ with tab_equipe:
     ax1.set_ylabel("1ère mi-temps", fontsize=12); ax1.legend(fontsize=9, loc="upper right")
     ax2 = fig.add_subplot(gs[1]); game_flow_ax(events, 2, ax2, FOCUS_TEAM, opposition)
     ax2.set_ylabel("2ème mi-temps", fontsize=12); ax2.legend(fontsize=9, loc="upper right")
-    fig.text(0.5, 0.96, "Domination: possession relative + danger (OBV)", ha="center", fontsize=18, fontweight="bold", color="black")
+    st.markdown("### Domination : Possession & Danger")
     st.pyplot(fig, use_container_width=True)
+    
+    st.markdown("### Possession")
+    plot_possession_versailles_only(events, focus_team=FOCUS_TEAM, opposition=opposition)
+
 
     # xG cumulés
     st.markdown("### xG cumulés")
@@ -705,11 +1386,17 @@ with tab_equipe:
     st.markdown("### Shot Map")
     plot_shot_map_combined(events, FOCUS_TEAM, opposition)
 
-    # Zones OBV
-    st.markdown("### OBV Heatmap (Versailles)")
-    plot_obv_kde(events, FOCUS_TEAM, bw=0.3)
+    st.markdown("### Entrées dans la surface")
+    plot_entrees_surface(events, focus_team=FOCUS_TEAM)
+    
+    st.markdown("### Jeu dans le dernier tiers")
+    plot_entrees_last_third(events, focus_team=FOCUS_TEAM)
 
-    st.markdown("### Shot Scatter (xG uplift vs StatsBomb xG)")
+    
+    st.markdown("### Menace Progressive - >25%")
+    plot_progressive_threat_obv(events, team_name=FOCUS_TEAM, min_gain_pct=0.25)
+
+    st.markdown("### Performance des tirs")
     plot_shot_scatter(events, FOCUS_TEAM, opposition)
 
 
@@ -907,6 +1594,8 @@ with tab_joueurs:
     
 
 # --- KPI helpers (safe) ------------------------------------------------------
+
+
 def _zscore(series: pd.Series) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce")
     mu = s.mean()
@@ -915,82 +1604,146 @@ def _zscore(series: pd.Series) -> pd.Series:
         return pd.Series([0.0] * len(s), index=series.index)
     return (s - mu) / sd
 
-def group_by_count(count_df: pd.DataFrame) -> pd.DataFrame:
-    if count_df.empty:
-        return pd.DataFrame(columns=["team","match_id","value","plot"])
-    out = count_df.groupby(["team","match_id"]).size().reset_index(name="value")
-    out["plot"] = _zscore(out["value"])
-    return out
 
-def group_by_metric(metric_df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    if metric_df.empty or metric not in metric_df.columns:
-        return pd.DataFrame(columns=["team","match_id","value","plot"])
-    out = (
-        metric_df.groupby(["team","match_id"])[metric]
-        .sum().reset_index(name="value")
+def plot_kpi_zscore_benchmark(
+    statsbomb_df: pd.DataFrame,
+    match_id: int,
+    focus_team: str = "Versailles",
+):
+    """
+    Benchmark plot:
+      - y = KPI name
+      - x = z-score across all matches for `focus_team`
+      - grey dots = other matches
+      - big blue dot = selected match
+      - label on big dot = raw KPI value for that match
+    """
+
+    if statsbomb_df is None or statsbomb_df.empty:
+        st.info("KPI benchmark: statsbomb_df is empty.")
+        return None
+
+    df = statsbomb_df.copy()
+
+    needed = {"match_id", "team_name"}
+    if not needed.issubset(df.columns):
+        st.info(f"KPI benchmark: missing columns {needed - set(df.columns)}.")
+        return None
+
+    df = df[df["team_name"] == focus_team].copy()
+    if df.empty:
+        st.info("KPI benchmark: no rows for focus team.")
+        return None
+
+    KPI_MAP = [
+        ("xG", "team_match_np_xg"),
+        ("Corner xG", "team_match_corner_xg"),
+        ("xG / tir", "team_match_np_xg_per_shot"),
+        ("OBV Shot", "team_match_obv_shot"),
+      
+        ("Tirs", "team_match_np_shots"),
+        ("Tirs contre-attaque", "team_match_counter_attacking_shots"),
+       
+        ("Passes réussies", "team_match_successful_passes"),
+        ("Cente réussis", "team_match_successful_crosses_into_box"),
+    
+        ("Entrées surface", "team_match_touches_in_box"),       
+        ("Actions réussies 20m", "team_match_deep_completions"),        
+        ("Deep progressions", "team_match_deep_progressions"),        
+        ("OBV", "team_match_obv"),
+        ("Dribbles réussi", "team_match_completed_dribbles"),        
+        
+        ("xG concédés", "team_match_np_xg_conceded"),      
+        ("PPDA", "team_match_ppda"),    
+        ("Pression Porteur", "team_match_aggression"),      
+        ("Pressing moitié Adv", "team_match_fhalf_pressures"),
+        ("Ballons gagnés", "team_match_defensive_action_regains"),
+       
+    ]
+
+    # keep only KPIs that exist
+    KPI_MAP = [(lab, col) for lab, col in KPI_MAP if col in df.columns]
+    if not KPI_MAP:
+        st.info("KPI benchmark: none of the KPI columns exist in statsbomb_df.")
+        return None
+
+    # long format
+    rows = []
+    for lab, col in KPI_MAP:
+        s = pd.to_numeric(df[col], errors="coerce")
+        z = _zscore(s)
+        tmp = pd.DataFrame(
+            {"match_id": df["match_id"], "kpi_label": lab, "value": s, "z": z}
+        )
+        rows.append(tmp)
+
+    plot_df = pd.concat(rows, ignore_index=True).dropna(subset=["z"])
+    plot_df["is_this"] = plot_df["match_id"].astype(int).eq(int(match_id))
+
+    # y order (top to bottom)
+    kpi_order = [lab for lab, _ in KPI_MAP]
+    plot_df["kpi_label"] = pd.Categorical(plot_df["kpi_label"], categories=kpi_order, ordered=True)
+
+    y_map = {lab: i for i, lab in enumerate(kpi_order)}
+    plot_df["y"] = plot_df["kpi_label"].map(y_map).astype(float)
+
+    # jitter for grey points only
+    rng = np.random.default_rng(42)
+    plot_df["y_jit"] = plot_df["y"] + np.where(
+        plot_df["is_this"], 0.0, rng.normal(0, 0.08, size=len(plot_df))
     )
-    out["plot"] = _zscore(out["value"])
-    return out
 
-# --- KPI point plotter -------------------------------------------------------
-def plot_variable(team: str, plot_data: pd.DataFrame, y_value: float, game_id: int, ax):
-    if plot_data.empty:
-        return
-    is_this = plot_data["match_id"] == game_id
-    # visuals
-    color_team = FOCUS_COLOR if team == FOCUS_TEAM else OPPO_COLOR
-    color_other = OPPO_COLOR if team == FOCUS_TEAM else FOCUS_COLOR
+    fig, ax = plt.subplots(figsize=(10, 0.55 * len(kpi_order) + 1.5), facecolor="white")
 
-    plot_data = plot_data.copy()
-    plot_data["alpha"] = np.where(is_this, 1.0, 0.2)
-    plot_data["ec"]    = np.where(is_this, color_team, color_other)
-    plot_data["size"]  = np.where(is_this, 5000.0, 500.0)
-    plot_data["color"] = np.where(is_this, color_other, color_team)
+    # other matches
+    others = plot_df[~plot_df["is_this"]]
+    ax.scatter(
+        others["z"], others["y_jit"],
+        s=25, alpha=0.35, color="grey", edgecolor="none", zorder=1
+    )
 
-    x = plot_data["plot"].to_numpy()
-    y = np.full_like(x, y_value, dtype=float)
-    ax.scatter(x, y, s=plot_data["size"], alpha=plot_data["alpha"],
-               c=plot_data["color"], ec=plot_data["ec"], lw=5, zorder=10)
+    # selected match
+    thism = plot_df[plot_df["is_this"]]
+    ax.scatter(
+        thism["z"], thism["y"],
+        s=220, alpha=1.0, color="#0031E3",
+        edgecolor="white", linewidth=1.5, zorder=3
+    )
 
-    this_row = plot_data[is_this]
-    if not this_row.empty:
-        val = float(this_row.iloc[0]["value"])
-        x_pos = float(this_row.iloc[0]["plot"])
-        ax.annotate(f"{val:.2f}", (x_pos, y_value - 0.05),
-                    color="white", fontsize=22, fontweight="bold", ha="center", zorder=11)
+    # label selected match with raw value
+    for _, r in thism.iterrows():
+        if pd.isna(r["value"]):
+            continue
+        val = float(r["value"])
+        ax.text(
+            float(r["z"]) + 0.08, float(r["y"]),
+            f"{val:.2f}",
+            va="center", ha="left",
+            fontsize=9, color="black", fontweight="bold", zorder=4
+        )
+
+    ax.axvline(0, c="black", ls="--", lw=1.2, alpha=0.6)
+    ax.set_yticks(range(len(kpi_order)))
+    ax.set_yticklabels(kpi_order, fontsize=6)
+    ax.invert_yaxis()
+
+    ax.set_xlabel("Z-score (vs saison)", fontsize=6)
+    ax.set_xlim(-3.2, 3.2)
+    ax.grid(axis="x", color="lightgrey", lw=0.6, alpha=0.6)
+
+    for s in ["top", "right", "left"]:
+        ax.spines[s].set_visible(False)
+
+    plt.tight_layout()
+    return fig
 
     
+    
 with tab_kpi:
-    st.markdown("## 📊 KPI (benchmark match vs saison)")
+    render_kpi_pyramid_from_teamstats(statsbomb_df, match_id, focus_team=FOCUS_TEAM)
 
-    df = events  # already loaded for match_id
-
-    def plot_team_data_simple(team: str, df_events: pd.DataFrame, game_id: int):
-        fig, ax = plt.subplots(figsize=(12, 8))
-        # Shots For (exclude penalties if column exists)
-        shots_for = df_events[(df_events["type"] == "Shot") & (df_events["team"] == team)].copy()
-        if "shot_type" in shots_for.columns:
-            shots_for = shots_for[shots_for["shot_type"].ne("Penalty")]
-        shots_df = group_by_count(shots_for)
-        plot_variable(team, shots_df, 0, game_id, ax)
-
-        # xG For
-        xg_for = group_by_metric(shots_for, "shot_statsbomb_xg")
-        plot_variable(team, xg_for, 1, game_id, ax)
-
-        # Pressures
-        pressures = df_events[(df_events["type"] == "Pressure") & (df_events["team"] == team)].copy()
-        pressures_df = group_by_count(pressures)
-        plot_variable(team, pressures_df, 2, game_id, ax)
-
-        ax.set_yticks([0, 1, 2])
-        ax.set_yticklabels(["Shots", "xG", "Pressures"], fontsize=12)
-        ax.axvline(0, c="black", ls="--", lw=2)
-        ax.set_xlim(-3, 3)
-        ax.set_title(f"KPI Match vs saison — {team}")
-        for s in ["top", "right", "left", "bottom"]:
-            ax.spines[s].set_visible(False)
-        return fig
-
-    fig_kpi = plot_team_data_simple(FOCUS_TEAM, df, match_id)
-    st.pyplot(fig_kpi, use_container_width=True)
+    st.markdown("### KPI Match vs Season")
+    fig_kpi = plot_kpi_zscore_benchmark(statsbomb_df, match_id, focus_team=FOCUS_TEAM)
+    if fig_kpi is not None:
+        st.pyplot(fig_kpi, use_container_width=True)
+        plt.close(fig_kpi)
