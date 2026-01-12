@@ -137,7 +137,7 @@ if page == "Pre-entrainement":
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
         "Fischer", "Kalai","Koffi","M'bone",  "Barbet",
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Yavorsky", "Guillaume",
-        "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet"
+        "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet","Badey"
      
     ]
 
