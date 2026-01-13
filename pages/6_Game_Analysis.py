@@ -12,13 +12,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+import matplotlib as mpl
 from scipy.ndimage import gaussian_filter1d
 from statsbombpy import sb
 from scipy.stats import gaussian_kde
+from matplotlib.colors import LinearSegmentedColormap
 
 # Optionnel: mplsoccer pour les tracés joueurs
 from mplsoccer import VerticalPitch
 from mplsoccer import Pitch
+
 
 
 # ---------- Paramètres ----------
@@ -132,7 +135,6 @@ def load_team_match_stats(comp_id: int, season_id: int, focus_team: str, creds: 
     return df
 
 statsbomb_df = load_team_match_stats(COMP_ID, SEASON_ID, FOCUS_TEAM, CREDS)
-
 
 
 def group_to_5min(minute_series: pd.Series) -> pd.Series:
@@ -503,9 +505,6 @@ def plot_obv_kde(events: pd.DataFrame, team_name: str, bw: float = 0.3):
     st.pyplot(fig, use_container_width=True)
 
 
-
-import matplotlib as mpl
-
 def plot_progressive_threat_obv(
     events: pd.DataFrame,
     team_name: str,
@@ -712,7 +711,12 @@ with st.sidebar:
     sel_oppo = st.selectbox("Adversaire", opponents, index=0)
     m_oppo = matches[matches["opponent"] == sel_oppo].copy()
     dates_for_oppo = sorted(m_oppo["match_date"].unique().tolist(), reverse=True)
-    sel_date = st.selectbox("Date du match", dates_for_oppo, index=0, format_func=lambda d: d.strftime("%Y-%m-%d"))
+    sel_date = st.selectbox(
+    "Date du match",
+    dates_for_oppo,
+    index=0,  # ← most recent match by default
+    format_func=lambda d: d.strftime("%Y-%m-%d")
+    )
 
 m_pick = m_oppo[m_oppo["match_date"] == sel_date].copy()
 if m_pick.empty:
@@ -1245,9 +1249,6 @@ def plot_entrees_last_third(events: pd.DataFrame, focus_team: str = "Versailles"
 
  
 
-
-
-
 def plot_possession_versailles_only(events: pd.DataFrame, focus_team: str, opposition: str):
     """
     Plot only Versailles possession %:
@@ -1355,9 +1356,6 @@ def plot_possession_versailles_only(events: pd.DataFrame, focus_team: str, oppos
     plt.close(fig)
     
 
-
-
-
 # ---------- Onglets principaux ----------
 tab_equipe, tab_joueurs, tab_kpi = st.tabs(["Match", "Joueurs", "KPI"])
 
@@ -1400,11 +1398,92 @@ with tab_equipe:
     plot_shot_scatter(events, FOCUS_TEAM, opposition)
 
 
-# ---------- Onglet Joueurs : intégration de ton code adapté ----------
-def draw_players_ball_receipts(df1: pd.DataFrame, df2: pd.DataFrame, team_name: str = "Versailles"):
-    df1 = df1.copy()
-    df1.dropna(subset=["player_name"], inplace=True)
-    players = df1.loc[df1["team_name"] == team_name, "player_name"].dropna().unique().tolist()
+# --- Build a "player-plot" dataframe from raw StatsBomb events ----------------
+def build_players_plot_df(events: pd.DataFrame) -> pd.DataFrame:
+    """
+    Output columns (guaranteed):
+      - timestamp
+      - event_type_name
+      - team_name
+      - player_name
+      - location_x, location_y
+      - end_location_x, end_location_y
+      - pass_outcome
+      - ball_receipt_outcome
+      - dribble_outcome
+      - obv_total_net
+    """
+    ev = events.copy()
+
+    def _xy(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            return float(v[0]), float(v[1])
+        return (np.nan, np.nan)
+
+    # --- base columns ---
+    out = pd.DataFrame(
+        {
+            "timestamp": ev.get("timestamp", pd.NaT),
+            "event_type_name": ev.get("type", "").astype(str),
+            "team_name": ev.get("team", "").astype(str),
+            "player_name": ev.get("player", "").astype(str),
+            "obv_total_net": pd.to_numeric(ev.get("obv_total_net", np.nan), errors="coerce"),
+            "pass_outcome": ev.get("pass_outcome", np.nan),
+            "ball_receipt_outcome": ev.get("ball_receipt_outcome", np.nan),
+            "dribble_outcome": ev.get("dribble_outcome", np.nan),
+        }
+    )
+
+    # --- start locations ---
+    lx, ly = zip(*ev.get("location", pd.Series([None] * len(ev))).map(_xy))
+    out["location_x"] = lx
+    out["location_y"] = ly
+
+    # --- end locations (pass/carry) ---
+    pass_end = ev.get("pass_end_location", pd.Series([None] * len(ev)))
+    carry_end = ev.get("carry_end_location", pd.Series([None] * len(ev)))
+
+    ex = np.full(len(ev), np.nan, dtype=float)
+    ey = np.full(len(ev), np.nan, dtype=float)
+
+    is_pass = out["event_type_name"].eq("Pass").to_numpy()
+    is_carry = out["event_type_name"].eq("Carry").to_numpy()
+
+    if len(ev) > 0:
+        pex, pey = zip(*pass_end.map(_xy))
+        cex, cey = zip(*carry_end.map(_xy))
+
+        ex[is_pass] = np.asarray(pex, dtype=float)[is_pass]
+        ey[is_pass] = np.asarray(pey, dtype=float)[is_pass]
+
+        ex[is_carry] = np.asarray(cex, dtype=float)[is_carry]
+        ey[is_carry] = np.asarray(cey, dtype=float)[is_carry]
+
+    out["end_location_x"] = ex
+    out["end_location_y"] = ey
+
+    # --- align a couple labels with your previous code ---
+    out["event_type_name"] = out["event_type_name"].replace({"Carry": "Carries", "Shot": "shot"})
+
+    # clean player/team empty strings -> NaN
+    out["player_name"] = out["player_name"].replace({"None": np.nan, "nan": np.nan, "": np.nan})
+    out["team_name"] = out["team_name"].replace({"None": np.nan, "nan": np.nan, "": np.nan})
+
+    return out
+
+
+def draw_players_ball_receipts(
+    df_plot: pd.DataFrame,
+    team_name: str = "Versailles",
+    bw: float = 0.35,
+    gridsize: int = 140,
+    alpha: float = 0.85,
+):
+
+    df = df_plot.copy()
+    df = df[df["team_name"].eq(team_name)].dropna(subset=["player_name", "location_x", "location_y"])
+
+    players = df["player_name"].dropna().unique().tolist()
     if not players:
         st.info("Aucun joueur trouvé pour l'équipe sélectionnée.")
         return
@@ -1414,36 +1493,107 @@ def draw_players_ball_receipts(df1: pd.DataFrame, df2: pd.DataFrame, team_name: 
     nrows = int(np.ceil(n / ncols))
 
     pitch = VerticalPitch(line_zorder=2, line_color="black", linewidth=1, pitch_type="statsbomb")
-    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(18, 3*nrows+2))
+    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(18, 3 * nrows + 2))
     axes = np.atleast_2d(axes)
 
+    # VerticalPitch(statsbomb): axis x in [0,80], axis y in [0,120]
+    xs = np.linspace(0, 80, int(gridsize * 80 / 120))
+    ys = np.linspace(0, 120, gridsize)
+    X, Y = np.meshgrid(xs, ys)
+    grid = np.vstack([X.ravel(), Y.ravel()])
+
     for i, player_name in enumerate(players):
-        p1 = df1[df1["player_name"] == player_name]
-        p2 = df2[df2["player_name"] == player_name] if df2 is not None else pd.DataFrame()
+        ax = axes[i // ncols, i % ncols]
+        p = df[df["player_name"].eq(player_name)].copy()
 
-        pos = p1[p1["event_type_name"].isin(["Ball Receipt*", "Pass", "Duel"])]
-        miss = p1[p1["event_type_name"].isin(["Miscontrol", "Dispossessed"])]
+        # --- SUCCESS receipts = Ball Receipt* not incomplete ---
+        receipts = p[p["event_type_name"].eq("Ball Receipt*")].copy()
+        # normalize outcome to string to avoid NaN/"nan" issues
+        out_str = receipts.get("ball_receipt_outcome", pd.Series([np.nan]*len(receipts))).astype(str)
+        is_incomplete_receipt = out_str.eq("Incomplete")
 
-        r = i // ncols
-        c = i % ncols
-        ax = axes[r, c]
+        success_receipts = receipts[~is_incomplete_receipt].dropna(subset=["location_x", "location_y"])
+        fail_receipts = receipts[is_incomplete_receipt].dropna(subset=["location_x", "location_y"])
 
-        # KDE si dispo
-        try:
-            pitch.kdeplot(pos["location_x"], pos["location_y"], ax=ax, cmap="Blues", fill=True, levels=100)
-        except Exception:
-            pass
-        pitch.scatter(pos["location_x"], pos["location_y"], alpha=1, s=12, color="black", ax=ax)
-        pitch.scatter(miss["location_x"], miss["location_y"], alpha=1, s=12, color="red", ax=ax)
-        ax.set_title(player_name, fontsize=11, fontweight="bold")
+        # --- OTHER failures shown as red dots ---
+        miscontrol = p[p["event_type_name"].eq("Miscontrol")].dropna(subset=["location_x", "location_y"])
+        dispossessed = p[p["event_type_name"].eq("Dispossessed")].dropna(subset=["location_x", "location_y"])
 
-    fig.suptitle("Ballons touchés — Versailles", fontsize=18, fontweight="bold")
+        # --- red dots dataframe (exactly what you plot in red) ---
+        miss = pd.concat([fail_receipts, miscontrol, dispossessed], ignore_index=True)
+
+        n_success = int(len(success_receipts))
+        n_fail = int(len(miss))
+        n_total = n_success + n_fail
+
+        success_pct = (100.0 * n_success / n_total) if n_total > 0 else np.nan
+        title = (
+            f"{player_name} | {success_pct:.1f}% ({n_success}/{n_total})"
+            if np.isfinite(success_pct)
+            else f"{player_name} | Success: -"
+        )
+
+        # --- KDE from SUCCESS receipts only (black dots) ---
+        pos = success_receipts
+
+        if len(pos) >= 10:
+            pts = np.vstack([pos["location_y"].to_numpy(), pos["location_x"].to_numpy()])  # (axis-x, axis-y)
+            try:
+                kde = gaussian_kde(pts, bw_method=bw)
+                Z = kde(grid).reshape(X.shape)
+
+                zmax = float(np.nanmax(Z)) if np.isfinite(np.nanmax(Z)) else 0.0
+                if zmax > 0:
+                    Z = Z / zmax
+
+                ax.imshow(
+                    Z,
+                    extent=[0, 80, 0, 120],
+                    origin="lower",
+                    cmap="Blues",
+                    alpha=alpha,
+                    aspect="auto",
+                    zorder=1,
+                )
+            except Exception:
+                pass
+
+        # --- scatter (consistent with the counts) ---
+        if n_success > 0:
+            pitch.scatter(
+                pos["location_x"], pos["location_y"],
+                ax=ax, s=10, color="black", alpha=0.9, zorder=3
+            )
+
+        if n_fail > 0:
+            pitch.scatter(
+                miss["location_x"], miss["location_y"],
+                ax=ax, s=14, color="red", alpha=0.9, zorder=4
+            )
+
+        ax.set_title(title, fontsize=9, fontweight="bold")
+
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
-def draw_players_pass_carry_dribble(df1: pd.DataFrame, team_name: str = "Versailles"):
-    sub = df1[df1["team_name"] == team_name].copy()
-    players = sub["player_name"].dropna().unique().tolist()
+
+# --- 2) PASS / CARRY / DRIBBLE ----------------------------------------------
+def draw_players_pass_carry_dribble(df_plot: pd.DataFrame, team_name: str = "Versailles"):
+    """
+    Adds to each player title the net meters won toward goal (x-axis in horizontal pitch):
+      net_m = sum( (end_x - start_x) ) over:
+        - completed passes
+        - carries
+    Can be positive or negative.
+    """
+    df = df_plot.copy()
+    df = df[df["team_name"].eq(team_name)].dropna(subset=["player_name", "location_x", "location_y"])
+
+    players = df["player_name"].dropna().unique().tolist()
     if not players:
         st.info("Aucun joueur trouvé pour l'équipe sélectionnée.")
         return
@@ -1452,146 +1602,229 @@ def draw_players_pass_carry_dribble(df1: pd.DataFrame, team_name: str = "Versail
     ncols = 6
     nrows = int(np.ceil(n / ncols))
 
-    pitch = VerticalPitch(line_color="black", linewidth=1)
-    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(18, 3*nrows+2))
+    pitch = VerticalPitch(line_color="black", linewidth=1, pitch_type="statsbomb")
+    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(18, 3 * nrows + 2))
     axes = np.atleast_2d(axes)
 
     for i, player_name in enumerate(players):
-        dfp = sub[sub["player_name"] == player_name]
-        df_pass = dfp[dfp["event_type_name"] == "Pass"][["location_x","location_y","end_location_x","end_location_y"]]
-        df_carry = dfp[dfp["event_type_name"] == "Carries"][["location_x","location_y","end_location_x","end_location_y"]]
-        df_drib = dfp[dfp["event_type_name"] == "Dribble"][["location_x","location_y"]]
+        ax = axes[i // ncols, i % ncols]
+        p = df[df["player_name"].eq(player_name)].copy()
 
-        ax = axes.flat[i]
-        # Passes
-        for _, row in df_pass.iterrows():
-            pitch.arrows(row["location_x"], row["location_y"],
-                         row["end_location_x"], row["end_location_y"],
-                         width=1.5, headwidth=3, headlength=3, color="grey", ax=ax)
-        # Carries
-        for _, row in df_carry.iterrows():
-            pitch.arrows(row["location_x"], row["location_y"],
-                         row["end_location_x"], row["end_location_y"],
-                         width=1.5, headwidth=3, headlength=3, linestyle="--", color="black", ax=ax)
-        # Dribbles
-        pitch.scatter(df_drib["location_x"], df_drib["location_y"], alpha=0.9, s=20, color="blue", ax=ax)
+        # ---- PASSES (completed) ----
+        passes = p[p["event_type_name"].eq("Pass")].copy()
+        if "pass_outcome" in passes.columns:
+            passes = passes[passes["pass_outcome"].isna()].copy()
+        passes = passes.dropna(subset=["end_location_x", "end_location_y", "location_x"])
 
-        ax.axhline(y=80, xmin=0, xmax=100, color="grey", linestyle="--")
-        ax.set_title(player_name, fontsize=11, fontweight="bold")
+        # ---- CARRIES ----
+        carries = p[p["event_type_name"].eq("Carries")].copy()
+        carries = carries.dropna(subset=["end_location_x", "end_location_y", "location_x"])
 
-    fig.suptitle("Passes • Conduites • Dribbles — Versailles", fontsize=18, fontweight="bold")
+        # ---- DRIBBLES ----
+        drib = p[p["event_type_name"].eq("Dribble")].copy()
+
+        # ---- NET METERS TOWARD GOAL (horizontal x-axis) ----
+        # StatsBomb coordinates are already in meters-ish scale (0..120). We treat 1 unit = 1 meter.
+        pass_gain = (passes["end_location_x"] - passes["location_x"]).sum() if not passes.empty else 0.0
+        carry_gain = (carries["end_location_x"] - carries["location_x"]).sum() if not carries.empty else 0.0
+        net_gain = float(pass_gain + carry_gain)
+
+        # ---- PLOT ----
+        if not passes.empty:
+            pitch.arrows(
+                passes["location_x"], passes["location_y"],
+                passes["end_location_x"], passes["end_location_y"],
+                ax=ax, width=1.4, headwidth=3.2, headlength=3.2,
+                color="grey", alpha=0.85, zorder=2
+            )
+
+        if not carries.empty:
+            pitch.arrows(
+                carries["location_x"], carries["location_y"],
+                carries["end_location_x"], carries["end_location_y"],
+                ax=ax, width=1.4, headwidth=3.2, headlength=3.2,
+                color="black", linestyle="--", alpha=0.9, zorder=3
+            )
+
+        if not drib.empty:
+            pitch.scatter(
+                drib["location_x"], drib["location_y"],
+                ax=ax, s=18, color=FOCUS_COLOR, alpha=0.85, zorder=4
+            )
+
+        sign = "+" if net_gain >= 0 else ""
+        ax.set_title(f"{player_name} | {sign}{net_gain:.1f}m", fontsize=10, fontweight="bold")
+
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+
+
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
-def draw_players_obv_bar(df1: pd.DataFrame, team_name: str = "Versailles"):
-    cols_needed = {"timestamp","event_type_name","team_name","player_name","location_x","location_y","obv_total_net"}
-    if not cols_needed.issubset(set(df1.columns)):
-        st.info("Colonnes OBV manquantes pour le barplot (obv_total_net...).")
+# --- 3) OBV BAR (+ / - stacked) ---------------------------------------------
+def draw_players_obv_bar(df_plot: pd.DataFrame, team_name: str = "Versailles"):
+    df = df_plot.copy()
+    df = df[df["team_name"].eq(team_name)].dropna(subset=["player_name"])
+
+    if "obv_total_net" not in df.columns or df["obv_total_net"].dropna().empty:
+        st.info("OBV indisponible (colonne obv_total_net absente ou vide).")
         return
 
-    pos = df1[df1["event_type_name"].isin(["Carries","Pass","shot"])].copy()
-    pos = pos[pos["team_name"] == team_name]
-    if pos.empty:
-        st.info("Aucune action pour OBV joueur.")
+    use = df[df["event_type_name"].isin(["Pass", "Carries", "Dribble"])].copy()
+    use["obv_total_net"] = pd.to_numeric(use["obv_total_net"], errors="coerce").fillna(0.0)
+
+    if use.empty:
+        st.info("Aucune action Pass/Carries/Dribble pour l'OBV joueur.")
         return
 
-    total_net = pos.groupby("player_name")["obv_total_net"].agg(list).reset_index()
-    total_net["pos"] = total_net["obv_total_net"].apply(lambda v: sum(x for x in v if x >= 0))
-    total_net["neg"] = total_net["obv_total_net"].apply(lambda v: sum(x for x in v if x < 0))
-    total_net = total_net[["player_name","neg","pos"]].sort_values("pos", ascending=False)
+    g = use.groupby("player_name")["obv_total_net"].agg(list).reset_index()
+    g["pos"] = g["obv_total_net"].apply(lambda v: float(sum(x for x in v if x >= 0)))
+    g["neg"] = g["obv_total_net"].apply(lambda v: float(sum(x for x in v if x < 0)))
+    g = g[["player_name", "neg", "pos"]].sort_values("pos", ascending=False)
 
     fig, ax = plt.subplots(figsize=(14, 7))
-    ax.bar(total_net["player_name"], total_net["neg"], color="red", edgecolor="black", linewidth=0.7)
-    ax.bar(total_net["player_name"], total_net["pos"], bottom=total_net["neg"], color="green", edgecolor="black", linewidth=0.7)
-    ax.set_title("Efficience ballon au pied (OBV + / -)", fontsize=18, fontweight="bold")
-    ax.set_xlabel(""); ax.set_ylabel("OBV net")
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    ax.bar(g["player_name"], g["neg"], edgecolor="black", linewidth=0.7)
+    ax.bar(g["player_name"], g["pos"], bottom=g["neg"], edgecolor="black", linewidth=0.7)
+
+    ax.set_title("Efficience ballon au pied (OBV + / -)", fontsize=14, fontweight="bold")
+    ax.set_ylabel("OBV net")
+    ax.set_xlabel("")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     plt.xticks(rotation=45, ha="right")
+
     st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
 
-# ---------- Tab Joueurs (API-only) ----------
-with tab_joueurs:
-    df1 = sb_events_to_df1(events).dropna(subset=["player_name"])
-    players = df1.loc[df1["team_name"] == FOCUS_TEAM, "player_name"].unique()
 
-    # 1) Ballons touchés / pertes (3x6)
-    nrows, ncols = 3, 6
-    pitch = VerticalPitch(line_zorder=2, line_alpha=0.5, goal_alpha=0.3)
-    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(16, 12))
 
-    for i, player_name in enumerate(players):
-        if i >= nrows * ncols: break
-        row, col = divmod(i, ncols)
-        ax = axes[row, col]
-        p = df1[df1["player_name"] == player_name]
-        pos  = p[p["event_type_name"].isin(["Ball Receipt*", "Pass", "Duel"])]
-        miss = p[p["event_type_name"].isin(["Miscontrol", "Dispossessed"])]
+def draw_players_obv_heatmaps_vertical(
+    events: pd.DataFrame,
+    team_name: str = "Versailles",
+    bins=(6, 4),
+    normalize: bool = True,
+):
+    """
+    Grid per player (VerticalPitch):
+      - Heatmap = SUM of obv_total_net for Pass/Carry/Dribble (not counts)
+      - Title = "Player | OBV: +X.XX"
+      - Uses VerticalPitch(statsbomb) -> coordinates handled by mplsoccer internally.
 
-        pch = VerticalPitch(line_zorder=2, line_color='black', linewidth=1, pitch_type='statsbomb')
-        try:
-            pch.kdeplot(pos.location_x, pos.location_y, ax=ax, cmap='Blues', fill=True, levels=100)
-        except Exception:
-            pass
-        pch.scatter(pos.location_x,  pos.location_y,  s=20, color="black", ax=ax)
-        pch.scatter(miss.location_x, miss.location_y, s=20, color="red",   ax=ax)
-        ax.set_title(player_name, fontsize=11, fontweight='bold')
+    Requirements in `events` (StatsBomb raw events df):
+      columns: team, player, type, location, obv_total_net
+      optional: pass_outcome (to exclude incomplete passes)
+    """
+    needed = {"team", "player", "type", "location", "obv_total_net"}
+    miss = needed - set(events.columns)
+    if miss:
+        st.info(f"OBV heatmap: missing columns {sorted(miss)}")
+        return
 
-    fig.suptitle("Ballons touchés — Versailles Players", fontsize=18, fontweight="bold")
-    plt.subplots_adjust(hspace=0.5, wspace=0.3)
-    st.pyplot(fig, use_container_width=True)
+    df = events.copy()
+    df = df[df["team"].astype(str).eq(team_name)].copy()
+    if df.empty:
+        st.info("OBV heatmap: no events for this team.")
+        return
 
-    # 2) Passes / Carries / Dribbles (3x6)
-    pitch = VerticalPitch(line_zorder=2, line_alpha=0.5, goal_alpha=0.3)
-    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(16, 12))
-    axes = np.asarray(axes).flatten()
+    df = df[df["type"].isin(["Pass", "Carry", "Dribble"])].copy()
 
-    for i, player_name in enumerate(players):
-        if i >= nrows * ncols: break
-        dfp = df1[(df1["player_name"] == player_name) & (df1["team_name"] == FOCUS_TEAM)]
-        df_pass  = dfp[dfp["event_type_name"] == "Pass"][["location_x","location_y","end_location_x","end_location_y"]]
-        df_carry = dfp[dfp["event_type_name"] == "Carries"][["location_x","location_y","end_location_x","end_location_y"]]
-        df_drib  = dfp[dfp["event_type_name"] == "Dribble"][["location_x","location_y"]]
+    # optional: remove incomplete passes
+    if "pass_outcome" in df.columns:
+        df = df[~((df["type"] == "Pass") & (df["pass_outcome"].notna()))].copy()
 
-        ax = axes[i]
-        pch = VerticalPitch(line_color='black', linewidth=1)
+    df["obv_total_net"] = pd.to_numeric(df["obv_total_net"], errors="coerce")
+    df = df.dropna(subset=["obv_total_net", "location", "player"])
+    if df.empty:
+        st.info("OBV heatmap: OBV/location empty after filtering.")
+        return
 
-        for _, r in df_pass.iterrows():
-            inside = (0 <= r.end_location_x <= 100) and (0 <= r.end_location_y <= 80)
-            color = "grey" if inside else "tan"
-            pch.arrows(r.location_x, r.location_y, r.end_location_x, r.end_location_y,
-                       width=1.5, headwidth=3, headlength=3, color=color, ax=ax)
+    def _xy(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            return float(v[0]), float(v[1])
+        return np.nan, np.nan
 
-        for _, r in df_carry.iterrows():
-            pch.arrows(r.location_x, r.location_y, r.end_location_x, r.end_location_y,
-                       width=1.5, headwidth=3, headlength=3, linestyle="--", color="black", ax=ax)
+    df["x"], df["y"] = zip(*df["location"].map(_xy))
+    df = df.dropna(subset=["x", "y"])
+    if df.empty:
+        st.info("OBV heatmap: no valid x/y after parsing.")
+        return
 
-        pch.scatter(df_drib.location_x, df_drib.location_y, s=30, color="blue", ax=ax)
-        ax.axhline(y=80, color='grey', linestyle='--')
-        ax.set_title(player_name, fontsize=11, fontweight='bold')
+    players = sorted(df["player"].astype(str).unique().tolist())
+    if not players:
+        st.info("OBV heatmap: no players found.")
+        return
 
-    fig.suptitle("Passes • Carries • Dribbles", fontsize=18, fontweight="bold")
-    st.pyplot(fig, use_container_width=True)
+    # cmap (white -> grey -> red) like the example
+    white = "white"
+    darkgrey = "#9A9A9A"
+    sbred = "#e21017"
+    cmap = LinearSegmentedColormap.from_list("", [white, darkgrey, sbred])
 
-    # 3) OBV ± par joueur
-    pos_df = df1[
-        (df1["team_name"] == FOCUS_TEAM) &
-        (df1["event_type_name"].isin(["Carries","Pass","shot"]))
-    ].copy()
+    n = len(players)
+    ncols = 6
+    nrows = int(np.ceil(n / ncols))
 
-    neg_total = pos_df[pos_df["obv_total_net"] < 0].groupby('player_name')["obv_total_net"].sum()
-    pos_total = pos_df[pos_df["obv_total_net"] >= 0].groupby('player_name')["obv_total_net"].sum()
-    total_net = pd.concat([neg_total, pos_total], axis=1).fillna(0)
-    total_net.columns = ['obv_total_net_neg','obv_total_net_pos']
-    total_net = total_net.sort_values('obv_total_net_pos', ascending=False)
+    pitch = VerticalPitch(pitch_type="statsbomb", pitch_color="white", line_zorder=2)
+    fig, axes = pitch.draw(nrows=nrows, ncols=ncols, figsize=(18, 3 * nrows + 2))
+    axes = np.atleast_2d(axes)
 
-    fig, ax = plt.subplots(figsize=(16, 9), facecolor="white")
-    total_net.plot(kind='bar', ax=ax, color=['red', 'green'], ec="black", lw=1, width=0.8)
-    ax.set_title('Efficience Ballon au pied (OBV ±)', fontsize=18, fontweight="bold")
-    ax.set_xlabel(''); ax.set_ylabel('Niveau de Menace')
-    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    hm_for_cbar = None
+
+    for i, player in enumerate(players):
+        ax = axes[i // ncols, i % ncols]
+        sub = df[df["player"].astype(str).eq(player)].copy()
+
+        total_obv = float(sub["obv_total_net"].sum())
+        sign = "+" if total_obv >= 0 else ""
+
+        bs = pitch.bin_statistic(
+            sub["x"].to_numpy(),
+            sub["y"].to_numpy(),
+            statistic="sum",
+            values=sub["obv_total_net"].to_numpy(),
+            bins=bins,
+            normalize=normalize,
+        )
+        hm = pitch.heatmap(bs, ax=ax, cmap=cmap, edgecolors="white", alpha=0.95)
+        hm_for_cbar = hm  # keep last mappable for shared colorbar
+
+        ax.set_title(f"{player} | {sign}{total_obv:.2f}", fontsize=7, fontweight="bold")
+
+    for j in range(n, nrows * ncols):
+        axes[j // ncols, j % ncols].axis("off")
+
+    if hm_for_cbar is not None:
+        cbar = fig.colorbar(
+            hm_for_cbar,
+            ax=axes.ravel().tolist(),
+            orientation="horizontal",
+            fraction=0.05,     # height of the bar
+            pad=0.06           # space between plots and bar
+        )
+        cbar.outline.set_edgecolor("#000000")
+        cbar.ax.tick_params(color="#000000", labelcolor="#000000")
+
+
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
-    
+    plt.close(fig)
+
+
+with tab_joueurs:
+    df_plot = build_players_plot_df(events)
+
+    st.markdown("### Ballons joués - Positionnement & conservation du ballon pour l'équipe")
+    draw_players_ball_receipts(df_plot, team_name=FOCUS_TEAM)
+
+    st.markdown("### Mètres gagnés vers l'avant par la conduite et la passe")
+    draw_players_pass_carry_dribble(df_plot, team_name=FOCUS_TEAM)
+
+
+    st.markdown("### Zone de menace et quantité de danger crée")
+    draw_players_obv_heatmaps_vertical(events, team_name=FOCUS_TEAM, bins=(6, 4), normalize=True)
+
 
 # --- KPI helpers (safe) ------------------------------------------------------
 
