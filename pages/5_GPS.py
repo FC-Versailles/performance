@@ -186,8 +186,12 @@ player_positions = {
     "KOUASSI":    "M",
     "ODZOUMO":    "ATT",
     "TRAORE":     "M",
+    "BADEY":      "DC",
+    "KABAMBA":    "ATT",
+    "KHOUMA":     "DC",
     "KOFFI":      "ATT",
     "TLILI":      "ATT"
+    
 }
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
