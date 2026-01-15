@@ -174,7 +174,20 @@ if page == "Pre-entrainement":
         def apply_gradient(df):
             return df.style.applymap(color_gradient, subset=['Sommeil','Stress', 'Fatigue', 'Courbature', 'Humeur','Alimentation'])
         
-        st.dataframe(apply_gradient(filtered_data_display), use_container_width=True)
+        row_height = 35  # approx height per row in px
+        header_height = 40
+        max_height = 900
+        
+        table_height = min(
+            header_height + row_height * len(filtered_data_display),
+            max_height
+        )
+        
+        st.dataframe(
+            apply_gradient(filtered_data_display),
+            use_container_width=True,
+            height=table_height
+        )
 
         # Calculate averages
         averages = filtered_data.groupby('Nom')[columns_to_convert].mean().reset_index()
