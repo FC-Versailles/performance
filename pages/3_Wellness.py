@@ -135,7 +135,7 @@ if page == "Pre-entrainement":
     # Define the full list of players
     all_players = [
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-        "Fischer", "Kalai","Koffi","M'bone",  "Barbet",
+        "Fischer", "Kalai","Koffi","Barbet",
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Yavorsky", "Guillaume",
         "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet","Badey"
      
@@ -575,7 +575,7 @@ elif page == "Post-entrainement":
         # Check for players who didn't fill the form
         all_players = [
              "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-             "Fischer", "Kalai","Koffi","M'bone",  "Barbet", 
+             "Fischer", "Kalai","Koffi",  "Barbet", 
              "Moussadek", "Odzoumo", "Kouassi","Renaud","Yavorsky", "Guillaume",
              "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet","Badey"
           
@@ -669,7 +669,7 @@ elif page == "Joueurs":
     # Liste canonique de joueurs et sélection
     all_players = [
         "Doucouré","Basque","Ben Brahim","Calvet","Chadet","Cisse","Adehoumi",
-        "Fischer", "Kalai","Koffi","M'bone", "Barbet",
+        "Fischer", "Kalai","Koffi", "Barbet",
         "Moussadek", "Odzoumo", "Kouassi","Renaud","Renot","Yavorsky", "Guillaume",
         "Santini","Zemoura","Tchato","Ouchen","Traoré",'Khouma','Kabamba',"Barbet","Badey"
     ]
