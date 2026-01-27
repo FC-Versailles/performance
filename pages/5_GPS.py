@@ -1404,7 +1404,7 @@ elif page == "Entrainement":
     ua_per_week["Semaine"] = pd.to_numeric(ua_per_week["Semaine"], errors="coerce")
     
     # --- Prepare weeks 1 to 20 for x-axis, merge with actual data (fill missing with 0) ---
-    weeks = pd.DataFrame({"Semaine": np.arange(1, 30)})
+    weeks = pd.DataFrame({"Semaine": np.arange(1, 50)})
     ua_per_week = weeks.merge(ua_per_week, on="Semaine", how="left").fillna(0)
     
     # --- Plot ---
