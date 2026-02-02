@@ -190,7 +190,7 @@ player_positions = {
     "KABAMBA":    "ATT",
     "KHOUMA":     "DC",
     "KOFFI":      "ATT",
-    "TLILI":      "ATT"
+    "ETIEN":      "ATT"
     
 }
 
