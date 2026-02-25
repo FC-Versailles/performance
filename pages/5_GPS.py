@@ -27,7 +27,8 @@ cmapa = matplotlib.cm.get_cmap('Greens')  # ou RdYlGn pour du rouge/vert
 import matplotlib.colors as mcolors
 import plotly.graph_objects as go
 from scipy.stats import zscore
-
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 # ── Constants ───────────────────────────────────────"──────────────────────────
 
 st.set_page_config(layout='wide')
