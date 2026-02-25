@@ -1534,58 +1534,37 @@ elif page == "Match":
 
     # --- Filter only GAME rows (no Prepa / N3)
     games = (
-        data[data["Type"].astype(str).str.upper().str.strip() == "GAME"]
+        data[data["Type"].astype(str).str.upper().str.strip().eq("GAME")]
         .loc[~data["Jour"].astype(str).str.lower().eq("prepa")]
         .loc[~data["Jour"].astype(str).str.strip().eq("N3")]
         .copy()
     )
     games["Date"] = pd.to_datetime(games["Date"], errors="coerce")
 
-    # --- Clean numeric columns needed for derived metrics
+    # --- Clean numeric columns needed for weighted team metrics
     base_cols = [
-        "Duration", "M/min", "M/min 15km/h",
+        "Duration",
+        "M/min", "M/min 15km/h",               # keep if you want to display provider fields
         "Distance 20-25km/h", "Distance 25km/h",
         "N° Sprints", "Acc"
     ]
+
+    def to_num(s):
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .replace("", pd.NA),
+            errors="coerce"
+        )
+
     for c in base_cols:
         if c in games.columns:
-            games[c] = (
-                games[c].astype(str)
-                        .str.replace(r"[^\d\-,\.]", "", regex=True)
-                        .str.replace(",", ".", regex=False)
-                        .replace("", pd.NA)
-            )
-            games[c] = pd.to_numeric(games[c], errors="coerce")
+            games[c] = to_num(games[c])
 
-    # --- Derived variables ---
-    # 1) M/min 20-25km/h
-    if {"Distance 20-25km/h", "Duration"}.issubset(games.columns):
-        games["M/min 20-25km/h"] = np.where(
-            (games["Duration"] > 0) & games["Distance 20-25km/h"].notna(),
-            games["Distance 20-25km/h"] / games["Duration"],
-            np.nan
-        )
-    # 2) M/min 25km/h  (no “Distance” word)
-    if {"Distance 25km/h", "Duration"}.issubset(games.columns):
-        games["M/min 25km/h"] = np.where(
-            (games["Duration"] > 0) & games["Distance 25km/h"].notna(),
-            games["Distance 25km/h"] / games["Duration"],
-            np.nan
-        )
-    # 3) Sprints/min
-    if {"N° Sprints", "Duration"}.issubset(games.columns):
-        games["Sprints/min"] = np.where(
-            (games["Duration"] > 0) & games["N° Sprints"].notna(),
-            games["N° Sprints"] / games["Duration"],
-            np.nan
-        )
-    # 4) Acc/min
-    if {"Acc", "Duration"}.issubset(games.columns):
-        games["Acc/min"] = np.where(
-            (games["Duration"] > 0) & games["Acc"].notna(),
-            games["Acc"] / games["Duration"],
-            np.nan
-        )
+    # --- Keep only valid player rows (avoid div-by-zero + junk rows)
+    if "Duration" in games.columns:
+        games = games.loc[games["Duration"].notna() & (games["Duration"] > 0)].copy()
 
     # --- One date per Jour for ordering
     jour_dates = (
@@ -1594,38 +1573,88 @@ elif page == "Match":
              .rename(columns={"Date": "MatchDate"})
     )
 
-    # --- Keep only the wanted columns
+    # -------------------------------------------------------------------------
+    # ✅ TEAM-LEVEL minutes-weighted rates:
+    #   r_team = sum(d_i) / sum(t_i)
+    #   for counts: sum(count_i) / sum(t_i)
+    # -------------------------------------------------------------------------
+    # 1) Aggregate sums per match day
+    sum_cols = ["Duration", "Distance 20-25km/h", "Distance 25km/h", "N° Sprints", "Acc"]
+    sum_cols = [c for c in sum_cols if c in games.columns]
+
+    team_sum = (
+        games.groupby("Jour", as_index=False)[sum_cols]
+             .sum(numeric_only=True)
+    )
+
+    # 2) Build weighted rates (safe division)
+    def safe_div(num, den):
+        return np.where((den.notna()) & (den > 0) & (num.notna()), num / den, np.nan)
+
+    if {"Distance 20-25km/h", "Duration"}.issubset(team_sum.columns):
+        team_sum["M/min 20-25km/h"] = safe_div(team_sum["Distance 20-25km/h"], team_sum["Duration"])
+
+    if {"Distance 25km/h", "Duration"}.issubset(team_sum.columns):
+        team_sum["M/min 25km/h"] = safe_div(team_sum["Distance 25km/h"], team_sum["Duration"])
+
+    if {"N° Sprints", "Duration"}.issubset(team_sum.columns):
+        team_sum["Sprints/min"] = safe_div(team_sum["N° Sprints"], team_sum["Duration"])
+
+    if {"Acc", "Duration"}.issubset(team_sum.columns):
+        team_sum["Acc/min"] = safe_div(team_sum["Acc"], team_sum["Duration"])
+
+    # 3) Optional: keep displaying "M/min" and "M/min 15km/h"
+    #    but compute them as a minutes-weighted mean of the per-player rates:
+    #      sum(rate_i * t_i) / sum(t_i)
+    #    (this matches team-level interpretation and avoids equal-weight players)
+    if {"M/min", "Duration"}.issubset(games.columns):
+        mm = (
+            games.assign(_mm_w=games["M/min"] * games["Duration"])
+                 .groupby("Jour", as_index=False)[["_mm_w", "Duration"]]
+                 .sum(numeric_only=True)
+        )
+        mm["M/min"] = safe_div(mm["_mm_w"], mm["Duration"])
+        team_sum = team_sum.merge(mm[["Jour", "M/min"]], on="Jour", how="left")
+
+    if {"M/min 15km/h", "Duration"}.issubset(games.columns):
+        mm15 = (
+            games.assign(_mm15_w=games["M/min 15km/h"] * games["Duration"])
+                 .groupby("Jour", as_index=False)[["_mm15_w", "Duration"]]
+                 .sum(numeric_only=True)
+        )
+        mm15["M/min 15km/h"] = safe_div(mm15["_mm15_w"], mm15["Duration"])
+        team_sum = team_sum.merge(mm15[["Jour", "M/min 15km/h"]], on="Jour", how="left")
+
+    # --- Final table order (same as before)
     keep_cols = [
         "Jour", "M/min", "M/min 15km/h",
         "M/min 20-25km/h", "M/min 25km/h",
         "Sprints/min", "Acc/min"
     ]
-    num_cols = [c for c in keep_cols if c != "Jour" and c in games.columns]
+    num_cols = [c for c in keep_cols if c != "Jour" and c in team_sum.columns]
 
-    # --- Mean per Jour
     team_mean = (
-        games.groupby("Jour", as_index=False)[num_cols].mean(numeric_only=True)
+        team_sum[["Jour"] + num_cols]
         .merge(jour_dates, on="Jour", how="left")
         .sort_values("MatchDate")
-        .reset_index(drop=True)            # <- important
+        .reset_index(drop=True)
     )
-    
+
     # --- Rounding
     for c in num_cols:
         team_mean[c] = team_mean[c].astype(float).round(2)
-    
+
     versailles_blue = "#0031E3"
-    
+
     def highlight_last_row(row, last_index):
         return [
             f"background-color:{versailles_blue}; color:white" if row.name == last_index else ""
             for _ in row
         ]
-    
-    # vue et surlignage de la dernière journée (ex: J4 FCVB)
+
     df_view  = team_mean[["Jour"] + num_cols]
-    last_idx = len(df_view) - 1           # <- index de la dernière ligne visible
-    
+    last_idx = len(df_view) - 1
+
     styled = (
         df_view.style
             .apply(highlight_last_row, axis=1, last_index=last_idx)
@@ -1639,30 +1668,109 @@ elif page == "Match":
             )
     )
     
-    # Afficher d’abord le tableau par match (la dernière ligne sera bleue, ex: J4 FCVB)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
     
-    # Puis seulement les moyennes
+    blues = cm.get_cmap("RdYlGn")
+    
+    def blue_gradient(series):
+        vals = pd.to_numeric(series, errors="coerce")
+        vmin = vals.min(skipna=True)
+        vmax = vals.max(skipna=True)
+    
+        def color(val):
+            if pd.isna(val) or vmin == vmax:
+                return ""
+            norm = (val - vmin) / (vmax - vmin)
+            rgba = blues(norm)
+            return f"background-color:{mcolors.rgb2hex(rgba)}"
+    
+        return [color(v) for v in vals]
+    
+    # Apply per metric column
+    for col in num_cols:
+        styled = styled.apply(blue_gradient, subset=[col])
+
+    # Dynamic height based on number of rows
+    n_rows = len(df_view)
+    row_height = 35
+    header_height = 40
+    table_height = header_height + n_rows * row_height
+    
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=min(table_height, 1000)  # cap at 1000px to avoid huge page
+)
+
+
+    
+    # -------------------------------------------------------------------------
+    # ✅ GLOBAL MEAN (team-level): compute from team_mean (NOT from games)
+    # -------------------------------------------------------------------------
     global_mean = (
-        games.groupby("Jour", as_index=False)[num_cols]
-             .mean(numeric_only=True)[num_cols]
-             .mean(numeric_only=True)
-             .round(2)
+        team_mean[num_cols]
+        .mean(numeric_only=True)
+        .round(2)
     )
     
-    # rattacher les positions
+    # -------------------------------------------------------------------------
+    # ✅ POSITION MEANS (minutes-weighted, computed from player rows in games)
+    #   We compute the SAME team KPIs but restricted to players of each position:
+    #     - for distance bands / counts: sum(metric) / sum(Duration)
+    #     - for M/min & M/min 15km/h provider rates: weighted mean by Duration
+    # -------------------------------------------------------------------------
     games["Pos"] = games["Name"].str.upper().map(player_positions).fillna("NC")
-    metrics = num_cols
     
-    def mean_for(pos):
-        sub = games.loc[games["Pos"] == pos, metrics]
-        return sub.mean(numeric_only=True).round(2)
+    def weighted_rate(sub, num, den="Duration"):
+        num_s = sub[num].sum(skipna=True)
+        den_s = sub[den].sum(skipna=True)
+        return (num_s / den_s) if pd.notna(den_s) and den_s > 0 else np.nan
     
-    mean_team = games[metrics].mean().round(2)
-    mean_dc   = mean_for("DC")
-    mean_m    = mean_for("M")
-    mean_pis  = mean_for("PIS")
-    mean_att  = mean_for("ATT")
+    def weighted_mean(sub, col, w="Duration"):
+        s = sub[[col, w]].dropna()
+        if s.empty:
+            return np.nan
+        wsum = s[w].sum()
+        return (s[col].mul(s[w]).sum() / wsum) if wsum > 0 else np.nan
+    
+    def summary_for(sub):
+        # sub must already be cleaned numeric and Duration > 0 filtered
+        out = {}
+    
+        # these columns exist in your final table (num_cols); compute only if requested
+        if "M/min" in num_cols and "M/min" in sub.columns:
+            out["M/min"] = weighted_mean(sub, "M/min")
+    
+        if "M/min 15km/h" in num_cols and "M/min 15km/h" in sub.columns:
+            out["M/min 15km/h"] = weighted_mean(sub, "M/min 15km/h")
+    
+        if "M/min 20-25km/h" in num_cols and {"Distance 20-25km/h", "Duration"}.issubset(sub.columns):
+            out["M/min 20-25km/h"] = weighted_rate(sub, "Distance 20-25km/h")
+    
+        if "M/min 25km/h" in num_cols and {"Distance 25km/h", "Duration"}.issubset(sub.columns):
+            out["M/min 25km/h"] = weighted_rate(sub, "Distance 25km/h")
+    
+        if "Sprints/min" in num_cols and {"N° Sprints", "Duration"}.issubset(sub.columns):
+            out["Sprints/min"] = weighted_rate(sub, "N° Sprints")
+    
+        if "Acc/min" in num_cols and {"Acc", "Duration"}.issubset(sub.columns):
+            out["Acc/min"] = weighted_rate(sub, "Acc")
+    
+        # ensure all requested metrics exist (fill missing with NaN)
+        for m in num_cols:
+            out.setdefault(m, np.nan)
+    
+        return pd.Series(out)[num_cols].round(2)
+    
+    # Ensure the same valid filter as earlier (defensive)
+    games_valid = games.loc[games["Duration"].notna() & (games["Duration"] > 0)].copy()
+    
+    mean_team = summary_for(games_valid)
+    
+    mean_dc   = summary_for(games_valid.loc[games_valid["Pos"] == "DC"])
+    mean_m    = summary_for(games_valid.loc[games_valid["Pos"] == "M"])
+    mean_pis  = summary_for(games_valid.loc[games_valid["Pos"] == "PIS"])
+    mean_att  = summary_for(games_valid.loc[games_valid["Pos"] == "ATT"])
     
     rows = [
         ("Moyenne équipe", mean_team),
@@ -1671,14 +1779,30 @@ elif page == "Match":
         ("Moyenne PIS",    mean_pis),
         ("Moyenne ATT",    mean_att),
     ]
-    summary = pd.DataFrame([r[1] for r in rows], index=[r[0] for r in rows]).reset_index()
-    summary = summary.rename(columns={"index": "Ligne"})
-
+    
+    summary = (
+        pd.DataFrame([r[1] for r in rows], index=[r[0] for r in rows])
+          .reset_index()
+          .rename(columns={"index": "Ligne"})
+    )
+    
     st.write("📌 Moyenne | Postes & équipe")
     st.dataframe(summary, use_container_width=True, hide_index=True)
     
-    # 2) Select a game to compare
-    sel_jour = st.selectbox("Comparer un match", team_mean["Jour"].tolist())
+    # -------------------------------------------------------------------------
+    # 2) Select a game to compare (same logic, but now global_mean matches team_mean)
+    # -------------------------------------------------------------------------
+    # 2) Select a game to compare (default = last row in team_mean)
+    jours = team_mean["Jour"].tolist()
+    
+    if "compare_match" not in st.session_state:
+        st.session_state["compare_match"] = jours[-1]  # last match by default
+    
+    sel_jour = st.selectbox(
+        "Comparer un match",
+        options=jours,
+        key="compare_match"
+    )
     
     if sel_jour:
         row = team_mean.loc[team_mean["Jour"] == sel_jour, num_cols].iloc[0]
@@ -1687,7 +1811,7 @@ elif page == "Match":
         st.markdown(f"**Écart de {sel_jour} par rapport à la moyenne globale :**")
     
         for col, pct in pct_var.items():
-            if pd.isna(pct):
+            if pd.isna(pct) or pd.isna(global_mean.get(col)) or global_mean.get(col) == 0:
                 continue
             if pct > 5:
                 emoji = "🟢"
@@ -1696,7 +1820,6 @@ elif page == "Match":
             else:
                 emoji = "⚪️"
             st.markdown(f"- {col} : {pct:+.1f}% {emoji}")
-
     # === 📊 Performance athlétique joueurs ===
 
     st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)  
@@ -1708,9 +1831,27 @@ elif page == "Match":
         st.info("Aucune donnée GAME ANALYSIS.")
         st.stop()
     
-    # 2) Sélecteur
-    games = sorted(df_analysis["Jour"].dropna().unique())
-    sel_game = st.selectbox("Choisissez un match", games, index=len(games)-1)
+# 2) Sélecteur (most recent first)
+
+    games = (
+        df_analysis
+            .dropna(subset=["Jour", "Date"])
+            .sort_values("Date")["Jour"]
+            .unique()
+            .tolist()
+    )
+    
+    games = games[::-1]  # reverse order
+    
+    if "selected_match" not in st.session_state:
+        st.session_state["selected_match"] = games[0]  # first = most recent
+    
+    sel_game = st.selectbox(
+        "Choisissez un match",
+        games,
+        key="selected_match"
+    )
+    
     df_game = df_analysis[df_analysis["Jour"] == sel_game].copy()
     
     # 3) Nettoyer AMPM
@@ -1812,6 +1953,7 @@ elif page == "Match":
         if metric in df_mean.columns:
             with row2[idx]:
                 st.plotly_chart(build_fig(metric), use_container_width=True)
+                
 
     st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
     st.markdown("#### 🔋 Charge athlétique joueurs")
@@ -2270,7 +2412,6 @@ elif page == "Match":
     best_perf = best_perf.sort_values(order_col, ascending=False).reset_index(drop=True)
     
     st.dataframe(best_perf, use_container_width=True)
-
 
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
 
