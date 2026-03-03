@@ -196,7 +196,7 @@ player_positions = {
 }
 
 # ── Sidebar: page selection ───────────────────────────────────────────────────
-pages = ["Entrainement","Match","Best performance","Joueurs","Minutes de jeu"]
+pages = ["Entrainement","Training Load","Match","Best performance","Joueurs","Minutes de jeu"]
 page  = st.sidebar.selectbox("Choisissez une page", pages)
 
 
@@ -405,12 +405,100 @@ elif page == "Entrainement":
         else:
             Refmatch[c] = Refmatch[c].round(0).astype("Int64")
 
-    # ========== Entrainement Block ==========
+
+# =========================
+# ENTRAINEMENT (locked targets + coefficient band)
+# =========================
+
     st.markdown("### Entraînement")
+    
     allowed_tasks = [
-        "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO", 
-        "OPTI +", "OPTI J-1", "MICRO", "DEV INDIV","WU + GAME + COMP"
+        "OPTI", "MESO", "DRILLS", "COMPENSATION", "MACRO", "OPPO",
+        "OPTI +", "OPTI J-1", "MICRO", "DEV INDIV", "WU + GAME + COMP"
     ]
+    
+    # 1) Hard-coded TARGETS per Type (EDIT ONLY HERE)
+    TYPE_TARGETS = {
+        "OPTI": {
+            "Duration": 60, "Distance": 4500, "Distance 15km/h": 900, "Distance 15-20km/h": 600,
+            "Distance 20-25km/h": 180, "Distance 25km/h": 40, "Acc": 35, "Dec": 35,
+            "Vmax": 29.5, "Distance 90% Vmax": 120
+        },
+        "MESO": {
+            "Duration": 75, "Distance": 5500, "Distance 15km/h": 1100, "Distance 15-20km/h": 700,
+            "Distance 20-25km/h": 220, "Distance 25km/h": 60, "Acc": 45, "Dec": 45,
+            "Vmax": 30.5, "Distance 90% Vmax": 150
+        },
+        "MICRO": {
+            "Duration": 50, "Distance": 3800, "Distance 15km/h": 700, "Distance 15-20km/h": 450,
+            "Distance 20-25km/h": 120, "Distance 25km/h": 20, "Acc": 25, "Dec": 25,
+            "Vmax": 28.5, "Distance 90% Vmax": 80
+        },
+        "OPTI J-1": {
+            "Duration": 40, "Distance": 3200, "Distance 15km/h": 500, "Distance 15-20km/h": 300,
+            "Distance 20-25km/h": 80, "Distance 25km/h": 10, "Acc": 20, "Dec": 20,
+            "Vmax": 27.5, "Distance 90% Vmax": 50
+        },
+        "MACRO": {
+        "Duration": 80,
+        "Distance": 7371,
+        "Distance 15km/h": 1507,
+        "Distance 15-20km/h": 750,
+        "Distance 20-25km/h": 260,
+        "Distance 25km/h": 152,
+        "Acc": 64,
+        "Dec": 59,
+        "Vmax": 30.5,
+        "Distance 90% Vmax": 160,
+        },
+    }
+    
+    objective_fields = [
+        "RPE",
+        "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h",
+        "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+    ]
+    target_fields = [c for c in objective_fields if c != "RPE"]
+    
+    def to_num(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace("\u202f", "", regex=False)
+             .replace("", pd.NA),
+            errors="coerce"
+        )
+    
+    def resolve_day_type(date_rows: pd.DataFrame, sel_ampm: str) -> str | None:
+        """
+        Dominant Type for the selected date (+ AM/PM if selected).
+        Weights by Duration when available, otherwise count.
+        """
+        if date_rows.empty or "Type" not in date_rows.columns:
+            return None
+    
+        sdf = date_rows.copy()
+    
+        if sel_ampm in ["AM", "PM"] and "AMPM" in sdf.columns:
+            sdf["AMPM"] = sdf["AMPM"].astype(str).str.upper().str.strip()
+            sdf = sdf[sdf["AMPM"].eq(sel_ampm)]
+    
+        if sdf.empty:
+            return None
+    
+        sdf["Type"] = sdf["Type"].astype(str).str.upper().str.strip()
+    
+        if "Duration" in sdf.columns:
+            d = to_num(sdf["Duration"]).fillna(0)
+            w = sdf.assign(_dur=d).groupby("Type")["_dur"].sum().sort_values(ascending=False)
+        else:
+            w = sdf["Type"].value_counts()
+    
+        return None if w.empty else str(w.index[0])
+    
+    # 2) Filter data
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     valid_dates = train_data["Date"].dropna()
     if valid_dates.empty:
@@ -418,77 +506,170 @@ elif page == "Entrainement":
         st.stop()
     
     min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
-    sel_date = st.date_input(
-        "Choisissez la date pour les objectifs",
-        value=max_d,
-        min_value=min_d,
-        max_value=max_d
-    )
+    
+    # 3) Date + AM/PM + Coef on ONE LINE (3 columns)
+    c1, c2, c3 = st.columns([1.1, 1.0, 0.9])
+    
+    with c1:
+        sel_date = st.date_input(
+            "Date",
+            value=max_d,
+            min_value=min_d,
+            max_value=max_d,
+            key="train_date",
+        )
+    
+    # build date_df NOW (needed to determine AM/PM options)
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
-    
-    # ====== AM/PM/Total logic (ultra minimal, robust) ======
-# ====== AM/PM/Total logic (ultra minimal, robust) ======
-    if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
-        ampm_unique = sorted([
-            str(x) for x in date_df["AMPM"].dropna().unique()
-            if str(x).strip() != "" and str(x).lower() != "nan"
-        ])
-        
-        # Reorder to have AM, PM, then Total
-        options = [x for x in ["AM", "PM"] if x in ampm_unique]
-        options.append("Total")
-    
-        sel_ampm = st.selectbox("Sélectionnez la session (AM/PM)", options, key="ampm")
-    
-        if sel_ampm == "Total":
-            # Nettoyage AVANT aggregation
-            num_cols = [c for c in date_df.columns if c in [
-                "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-                "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Distance 90% Vmax"
-            ]]
-            for c in num_cols + ["RPE", "Vmax"]:
-                if c in date_df.columns:
-                    date_df[c] = pd.to_numeric(
-                        date_df[c].astype(str)
-                                   .str.replace(r"[^\d\-,\.]", "", regex=True)
-                                   .str.replace(",", ".", regex=False)
-                                   .replace("", pd.NA),
-                        errors="coerce"
-                    )
-            agg_dict = {c: "sum" for c in num_cols}
-            for c in ["RPE", "Vmax"]:
-                if c in date_df.columns:
-                    agg_dict[c] = "mean"
-            filtered_df = date_df.groupby("Name", as_index=False).agg(agg_dict)
-        else:
-            filtered_df = date_df[date_df["AMPM"] == sel_ampm].copy()
-    else:
-        filtered_df = date_df.copy()
-    
-    if filtered_df.empty:
+    if date_df.empty:
         st.info(f"Aucune donnée d'entraînement pour le {sel_date}.")
         st.stop()
-    # --- Résumé JOURNÉE ---
-    erpe_col = next((c for c in filtered_df.columns if c.lower() == "rpe"), None)
-    if erpe_col is not None:
-        session_ERPE = pd.to_numeric(filtered_df[erpe_col], errors="coerce").mean()
+    
+    # AM/PM options
+    if "AMPM" in date_df.columns and not date_df["AMPM"].isnull().all():
+        ampm_unique = sorted([
+            str(x).upper().strip() for x in date_df["AMPM"].dropna().unique()
+            if str(x).strip() != "" and str(x).lower() != "nan"
+        ])
+        ampm_options = [x for x in ["AM", "PM"] if x in ampm_unique] + ["Total"]
     else:
-        st.warning("Aucune colonne ERPE trouvée dans la séance sélectionnée.")
-        session_ERPE = float("nan")
+        ampm_options = ["Total"]
+    
+    # ---- Default logic ----
+    if "AM" in ampm_options:
+        default_index = ampm_options.index("AM")
+    else:
+        default_index = 0  # fallback to first available option
+    
+    with c2:
+        sel_ampm = st.selectbox(
+            "Sélectionnez la session",
+            ampm_options,
+            index=default_index,
+            key="ampm",
+        )
+        
+    with c3:
+        coef = st.number_input(
+            "Coefficient",
+            min_value=0.90,
+            max_value=1.10,
+            value=1.00,
+            step=0.1,
+            format="%.1f",
+            key="coef_value",
+        )
+    
+    # 4) Build player-level df (filtered_df) + keep raw rows for type detection
+    date_df_raw = date_df.copy()
+    
+    # helper: columns to aggregate
+    SUM_COLS = [
+        "Duration", "Distance",
+        "Distance 15km/h", "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+        "Acc", "Dec", "Distance 90% Vmax"
+    ]
+    MEAN_COLS = ["RPE", "Vmax"]
+    
+    if sel_ampm == "Total":
+        # clean numeric columns before groupby
+        for c in SUM_COLS + MEAN_COLS:
+            if c in date_df.columns:
+                date_df[c] = to_num(date_df[c])
+    
+        agg_dict = {c: "sum" for c in SUM_COLS if c in date_df.columns}
+        for c in MEAN_COLS:
+            if c in date_df.columns:
+                agg_dict[c] = "mean"
+    
+        filtered_df = date_df.groupby("Name", as_index=False).agg(agg_dict)
+    else:
+        # filter by AM/PM first, then keep rows (no aggregation)
+        if "AMPM" in date_df.columns:
+            date_df["AMPM"] = date_df["AMPM"].astype(str).str.upper().str.strip()
+            filtered_df = date_df[date_df["AMPM"].eq(sel_ampm)].copy()
+        else:
+            filtered_df = date_df.copy()
+    
+    if filtered_df.empty:
+        st.info(f"Aucune donnée d'entraînement pour le {sel_date} ({sel_ampm}).")
+        st.stop()
+    
+    # 5) Detect day type + LOCK targets
+    day_type = resolve_day_type(date_df_raw, sel_ampm)
+    unique_types = (
+        sorted(date_df_raw["Type"].dropna().astype(str).str.upper().str.strip().unique())
+        if "Type" in date_df_raw.columns else []
+    )
+    
+    if day_type is None:
+        st.warning("Impossible de détecter le Type de la journée.")
+        st.stop()
+    
+    if day_type not in TYPE_TARGETS:
+        st.warning(f"Type '{day_type}' non présent dans TYPE_TARGETS. Ajoutez ses objectifs.")
+        st.stop()
+    
+    if len(unique_types) > 1:
+        st.warning(
+            f"Plusieurs Types détectés ce jour ({', '.join(unique_types)}). "
+            f"Objectifs appliqués sur le Type dominant : {day_type}"
+        )
+    
+    targets = TYPE_TARGETS[day_type]
+    
+    # 6) Coef tolerance bounds (fixed ±10% around coef)
+    TOL = 0.10
+    low = coef - TOL
+    high = coef + TOL
+    
+    def hl_coef(pct):
+        """pct is in %, compare pct/100 (coef) vs [low, high]."""
+        if pd.isna(pct):
+            return ""
+        try:
+            value = float(pct) / 100.0
+            if low <= value <= high:
+                return "background-color:#c8e6c9;"  # OK
+            if value < low:
+                return "background-color:#ffcdd2;"  # too low
+            return "background-color:#ffe0b2;"      # too high
+        except Exception:
+            return ""
+    
+    # 7) Show fixed targets (no user edit)
+    with st.expander("Objectifs (fixes) de la journée", expanded=True):
+        cols = st.columns(4)
+        items = [(k, targets.get(k, None)) for k in target_fields]
+        for i, (k, v) in enumerate(items):
+            with cols[i % 4]:
+                if v is None:
+                    st.write(f"**{k}**: —")
+                else:
+                    fmt = "{:.1f}" if k == "Vmax" else "{:.0f}"
+                    st.write(f"**{k}**: {fmt.format(float(v))}")
+    
+    # 8) Summary header (same logic, but FIXED indentation + always displayed)
+    erpe_col = next((c for c in filtered_df.columns if c.lower() == "rpe"), None)
+    session_ERPE = pd.to_numeric(filtered_df[erpe_col], errors="coerce").mean() if erpe_col else float("nan")
     
     max_duration = pd.to_numeric(filtered_df["Ttotal"], errors="coerce").max(skipna=True) if "Ttotal" in filtered_df.columns else float("nan")
     max_teffectif = pd.to_numeric(filtered_df["Teffectif"], errors="coerce").max(skipna=True) if "Teffectif" in filtered_df.columns else float("nan")
     
     try:
-        if pd.notna(max_duration) and max_duration > 0 and pd.notna(max_teffectif):
-            indicateur = float(max_teffectif) * 100 / float(max_duration)
-        else:
-            indicateur = 0
+        indicateur = (
+            float(max_teffectif) * 100 / float(max_duration)
+            if pd.notna(max_duration) and max_duration > 0 and pd.notna(max_teffectif)
+            else 0
+        )
     except Exception:
         indicateur = 0
     
     st.markdown(
         f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
+        f"Session : <b>{sel_ampm}</b> &nbsp; | &nbsp; "
+        f"Type : <b>{day_type}</b> &nbsp; | &nbsp; "
+        f"Coef : <b>{coef:.2f}</b> &nbsp; | &nbsp; "
         f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
         f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
         f"RPE estimé : <b>{session_ERPE:.0f}</b> &nbsp; | &nbsp; "
@@ -496,129 +677,79 @@ elif page == "Entrainement":
         unsafe_allow_html=True
     )
     
-    # ========== SLIDERS OBJECTIVES POUR % ==========
-    objective_fields = [
-        "RPE", "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
-        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
-    ]
-    obj_vars = [c for c in objective_fields if c != "RPE"]
-    row1, row2 = obj_vars[:5], obj_vars[5:]
-    objectives = {}
-    cols5 = st.columns(5)
-    for i, stat in enumerate(row1):
-        with cols5[i]:
-            objectives[stat] = st.slider(f"{stat} (%)", 0, 150, 100, key=f"obj_{stat}")
-    cols5b = st.columns(5)
-    for i, stat in enumerate(row2):
-        with cols5b[i]:
-            objectives[stat] = st.slider(f"{stat} (%)", 0, 150, 100, key=f"obj_{stat}")
+    # 9) Table base: raw values (player rows)
+    df_ent = filtered_df[["Name"] + [c for c in objective_fields if c in filtered_df.columns]].copy()
     
-    # ========== TABLE + POURCENTAGE + MOYENNES ==========
-    df_ent = filtered_df[["Name"] + [col for col in objective_fields if col in filtered_df.columns]].copy()
+    # clean + cast
     for c in objective_fields:
         if c not in df_ent.columns:
             continue
-        cleaned = (
-            df_ent[c].astype(str)
-                     .str.replace(r"[^\d\-,\.]", "", regex=True)
-                     .str.replace(",", ".", regex=False)
-                     .replace("", pd.NA)
-        )
-        num = pd.to_numeric(cleaned, errors="coerce")
-        df_ent[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
+        df_ent[c] = to_num(df_ent[c])
+        if c in {"RPE", "Vmax"}:
+            df_ent[c] = df_ent[c].round(1)
+        else:
+            df_ent[c] = df_ent[c].round(0).astype("Int64")
     
-    # --- build global vmax reference (before percentage loop)
-    vmax_all = (
-        data.copy()
-            .assign(Vmax=pd.to_numeric(
-                data["Vmax"].astype(str).str.replace(",", "."),
-                errors="coerce"
-            ))
-            .groupby("Name", as_index=False)["Vmax"]
-            .max()
-            .rename(columns={"Vmax": "Vmax_best"})
-    )
-    vmax_idx = vmax_all.set_index("Name")
-    
-    ref_idx = Refmatch.set_index("Name")
-    
-    # --- percentage columns ---
-    for c in objective_fields:
-        if c not in df_ent.columns or c == "RPE":
+    # 10) % columns vs targets (displayed as % of target)
+    for c in target_fields:
+        if c not in df_ent.columns:
             continue
         pct_col = f"{c} %"
-        df_ent[pct_col] = df_ent.apply(
-            lambda r: (
-                round(r[c] / vmax_idx.at[r["Name"], "Vmax_best"] * 100, 1)
-                if c == "Vmax"
-                and r["Name"] in vmax_idx.index
-                and pd.notna(r[c])
-                and pd.notna(vmax_idx.at[r["Name"], "Vmax_best"])
-                and vmax_idx.at[r["Name"], "Vmax_best"] > 0
-                else
-                round(r[c] / ref_idx.at[r["Name"], c] * 100, 1)
-                if r["Name"] in ref_idx.index
-                and pd.notna(r[c])
-                and pd.notna(ref_idx.at[r["Name"], c])
-                and ref_idx.at[r["Name"], c] > 0
-                else pd.NA
-            ),
-            axis=1,
-        )
+        tgt = float(targets.get(c, 0.0))
+        if tgt > 0 and pd.notna(tgt):
+            df_ent[pct_col] = ((df_ent[c].astype(float) / tgt) * 100).round(1)
+        else:
+            df_ent[pct_col] = pd.NA
     
+    # 11) Mean row (global)
     mean_data = {"Name": "Moyenne"}
     for c in objective_fields:
-        if c not in df_ent.columns:
-            continue
-        raw_mean = df_ent[c].mean(skipna=True)
-        if pd.isna(raw_mean):
-            mean_data[c] = pd.NA
-        else:
-            mean_data[c] = round(raw_mean, 1) if c == "Vmax" else int(round(raw_mean, 0))
-        if c != "RPE":
-            pct_col = f"{c} %"
-            if pct_col in df_ent.columns:
-                pct_mean = df_ent[pct_col].mean(skipna=True)
-                mean_data[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
+        if c in df_ent.columns:
+            m = df_ent[c].mean(skipna=True)
+            mean_data[c] = pd.NA if pd.isna(m) else (round(m, 1) if c in {"RPE", "Vmax"} else int(round(m, 0)))
+    for c in target_fields:
+        pct_col = f"{c} %"
+        if pct_col in df_ent.columns:
+            m = df_ent[pct_col].mean(skipna=True)
+            mean_data[pct_col] = pd.NA if pd.isna(m) else round(m, 1)
     
     df_ent = pd.concat([df_ent, pd.DataFrame([mean_data])], ignore_index=True)
     
-    # ====== Tri, couleurs, affichage ======
+    # 12) Position grouping + position means (same behavior as your original)
     df_ent["Pos"] = df_ent["Name"].str.upper().map(player_positions)
-    overall_mean = df_ent[df_ent["Name"] == "Moyenne"].copy()
     players_only = df_ent[df_ent["Name"] != "Moyenne"].copy()
-    # Ajoute cette ligne AVANT la boucle des groupes
-    players_only["Pos"] = players_only["Pos"].fillna("NC")  # 'NC' = non classé
+    players_only["Pos"] = players_only["Pos"].fillna("NC")
     
-    pos_order = ["DC", "M", "PIS", "ATT", "NC"]  # "NC" à la fin pour capturer les joueurs sans position
+    pos_order = ["DC", "M", "PIS", "ATT", "NC"]
     grouped = []
     for pos in pos_order:
         grp = players_only[players_only["Pos"] == pos].sort_values("Name")
         if grp.empty:
             continue
+    
         grouped.append(grp)
+    
         mean_vals = {"Name": f"Moyenne {pos}", "Pos": pos}
         for c in objective_fields:
-            if c not in grp.columns: continue
-            vals = grp[c]
-            moy = vals.mean(skipna=True)
-            if pd.isna(moy):
-                mean_vals[c] = pd.NA
-            else:
-                mean_vals[c] = round(moy, 1) if c == "Vmax" else int(round(moy, 0))
-            if c != "RPE":
-                pct_col = f"{c} %"
-                if pct_col in grp.columns:
-                    pct_mean = grp[pct_col].mean(skipna=True)
-                    mean_vals[pct_col] = round(pct_mean, 1) if not pd.isna(pct_mean) else pd.NA
+            if c in grp.columns:
+                v = grp[c].mean(skipna=True)
+                mean_vals[c] = pd.NA if pd.isna(v) else (round(v, 1) if c in {"RPE", "Vmax"} else int(round(v, 0)))
+        for c in target_fields:
+            pct_col = f"{c} %"
+            if pct_col in grp.columns:
+                v = grp[pct_col].mean(skipna=True)
+                mean_vals[pct_col] = pd.NA if pd.isna(v) else round(v, 1)
+    
         grouped.append(pd.DataFrame([mean_vals]))
     
     if not grouped:
         st.info("Aucun joueur dans les positions attendues. Vérifiez vos filtres ou vos données.")
         st.stop()
-    df_sorted = pd.concat(grouped, ignore_index=True)
-    df_sorted.loc[df_sorted['Name'].str.startswith('Moyenne'), 'Pos'] = ''
     
+    df_sorted = pd.concat(grouped, ignore_index=True)
+    df_sorted.loc[df_sorted["Name"].str.startswith("Moyenne"), "Pos"] = ""
+    
+    # 13) Display table (HTML, end of code)
     display_cols = [
         "RPE", "Name", "Pos",
         "Duration", "Duration %",
@@ -636,66 +767,62 @@ elif page == "Entrainement":
     df_display = df_sorted.loc[:, display_cols]
     
     def alternate_colors(row):
-        if row['Name'].startswith('Moyenne'): return [''] * len(display_cols)
-        color = '#EDE8E8' if row.name % 2 == 0 else 'white'
-        return [f'background-color:{color}'] * len(display_cols)
+        if row["Name"].startswith("Moyenne"):
+            return [""] * len(display_cols)
+        color = "#EDE8E8" if row.name % 2 == 0 else "white"
+        return [f"background-color:{color}"] * len(display_cols)
     
     def highlight_moyenne(row):
-        if row['Name'] == 'Moyenne':
-            return ['background-color:#EDE8E8; color:#0031E3;'] * len(display_cols)
-        elif row['Name'].startswith('Moyenne ') and row['Name'] != "Moyenne":
-            return ['background-color:#CFB013; color:#000000;'] * len(display_cols)
-        return [''] * len(display_cols)
-    
-    def hl(v, obj):
-        if pd.isna(v): return ""
-        d = abs(v - obj)
-        if d <= 5: return "background-color:#c8e6c9;"
-        if d <= 10: return "background-color:#fff9c4;"
-        if d <= 15: return "background-color:#ffe0b2;"
-        if d <= 100: return "background-color:#ffcdd2;"
-        return ""
+        if row["Name"] == "Moyenne":
+            return ["background-color:#EDE8E8; color:#0031E3;"] * len(display_cols)
+        if row["Name"].startswith("Moyenne ") and row["Name"] != "Moyenne":
+            return ["background-color:#CFB013; color:#000000;"] * len(display_cols)
+        return [""] * len(display_cols)
     
     styled = df_display.style
     styled = styled.apply(alternate_colors, axis=1)
     styled = styled.apply(highlight_moyenne, axis=1)
+    
+    # formats
     style_formats = {}
     for c in objective_fields:
-        if f"{c} %" in df_display.columns:
-            style_formats[f"{c} %"] = "{:.1f} %"
-        if c == "Vmax":
-            style_formats[c] = "{:.1f}"
-        elif c in df_display.columns:
-            style_formats[c] = "{:.0f}"
+        if c in df_display.columns:
+            style_formats[c] = "{:.1f}" if c in {"RPE", "Vmax"} else "{:.0f}"
+        pct_col = f"{c} %"
+        if pct_col in df_display.columns:
+            style_formats[pct_col] = "{:.1f} %"
     styled = styled.format(style_formats)
     
-    # === apply custom coloring to % columns using sliders ===
-    for stat in obj_vars:
+    # ✅ apply coef coloring on % columns (NOW df_display exists)
+    for stat in target_fields:
         pct_col = f"{stat} %"
         if pct_col in df_display.columns:
-            obj = objectives.get(stat, 100)
-            styled = styled.applymap(lambda v, obj=obj: hl(v, obj), subset=[pct_col])
+            styled = styled.applymap(hl_coef, subset=[pct_col])
     
     styled = styled.set_table_styles([
-        {'selector': 'th', 'props': [('background-color', '#0031E3'), ('color', 'white'), ('white-space', 'nowrap')]},
-        {'selector': 'th.row_heading, td.row_heading', 'props': 'display:none;'},
-        {'selector': 'th.blank', 'props': 'display:none;'}
+        {"selector": "th", "props": [("background-color", "#0031E3"), ("color", "white"), ("white-space", "nowrap")]},
+        {"selector": "th.row_heading, td.row_heading", "props": "display:none;"},
+        {"selector": "th.blank", "props": "display:none;"},
     ], overwrite=False)
     styled = styled.set_table_attributes('class="centered-table"')
     
+    # keep your RPE coloring as-is
     def rpe_color(val, vmin=1, vmax=10):
-        if pd.isna(val): return ""
+        if pd.isna(val):
+            return ""
         try:
             norm = (float(val) - vmin) / (vmax - vmin)
             norm = min(max(norm, 0), 1)
             color = mcolors.rgb2hex(cmap(norm))
             return f"background-color:{color};"
-        except:
+        except Exception:
             return ""
-    styled = styled.applymap(rpe_color, subset=["RPE"])
+    
+    if "RPE" in df_display.columns:
+        styled = styled.applymap(rpe_color, subset=["RPE"])
     
     import re
-    html_obj = re.sub(r'<th[^>]*>.*?%</th>', '<th>%</th>', styled.to_html())
+    html_obj = re.sub(r'<th[^>]*>.*?%</th>', "<th>%</th>", styled.to_html())
     
     total_rows = df_sorted.shape[0] + 1
     header_height = 30
@@ -708,13 +835,13 @@ elif page == "Entrainement":
         <style>
           .centered-table {{
             border-collapse: collapse;
-            min-width: 1200px;          /* force une largeur minimale */
-            white-space: nowrap;        /* empêche le retour à la ligne */
-            font-size: 11.5px;             /* texte plus petit */
+            min-width: 1200px;
+            white-space: nowrap;
+            font-size: 11.5px;
           }}
           .centered-table th, .centered-table td {{
             text-align: center;
-            padding: 2px 4px;           /* padding réduit */
+            padding: 2px 4px;
             border: 1px solid #ddd;
           }}
           .centered-table th {{
@@ -724,26 +851,15 @@ elif page == "Entrainement":
         </style>
       </head>
       <body>
-        <div style="
-             max-height: {iframe_height}px;
-             overflow-y: auto;
-             overflow-x: auto;
-          ">
+        <div style="max-height:{iframe_height}px; overflow-y:auto; overflow-x:auto;">
           {html_obj}
         </div>
       </body>
     </html>
     """
     
-    # components.html(
-    #     html_template,
-    #     height=iframe_height,
-    #     width=1500,     # suffisamment large pour déclencher le scroll horizontal
-    #     scrolling=True  # active les scrollbars
-    # )
-    safe = re.sub(r'</div>\s*</body>\s*</html>\s*$', '</div>', html_template, flags=re.I)
+    safe = re.sub(r"</div>\s*</body>\s*</html>\s*$", "</div>", html_template, flags=re.I)
     st.markdown(safe, unsafe_allow_html=True)
-
     #st.markdown(html_template, unsafe_allow_html=True)
     
     # # ── Export PDF with same colored table fit to A4 landscape ───────────────
@@ -885,9 +1001,145 @@ elif page == "Entrainement":
                                                                      
     # ── 2) PERFORMANCES DÉTAILLÉES (date range + filters) ──────────────────
     
+# =========================
+# 🏋️‍♂️ JOUEURS (bar plots)
+# =========================
 
+
+    BAR_COLOR = "#0031E3"
+    METRICS = ["Distance", "Distance 15km/h", "Distance 25km/h", "RPE"]
+    
+    # --- base dataframe (players only) ---
+    base_df = (df_ent.copy() if "df_ent" in locals() else filtered_df.copy())
+    base_df = base_df[~base_df["Name"].astype(str).str.startswith("Moyenne", na=False)].copy()
+    
+    # numeric coercion
+    for c in METRICS:
+        if c in base_df.columns:
+            base_df[c] = pd.to_numeric(base_df[c], errors="coerce")
+    
+    # team means
+    team_means = {m: (base_df[m].mean(skipna=True) if m in base_df.columns else None) for m in METRICS}
+    
+    # objectives (targets x coef) — only if targets exists and has the key
+    objectives = {}
+    if "targets" in locals() and isinstance(targets, dict):
+        for m in METRICS:
+            tgt = targets.get(m, None)
+            objectives[m] = (float(tgt) * float(coef)) if tgt is not None and pd.notna(tgt) else None
+    else:
+        objectives = {m: None for m in METRICS}
     
     
+    def make_sorted_bar_with_lines(
+        df: pd.DataFrame,
+        metric: str,
+        title: str,
+        unit: str = "",
+        team_mean: float | None = None,
+        objective: float | None = None,
+    ):
+        if metric not in df.columns:
+            return None
+    
+        d = df[["Name", metric]].dropna(subset=[metric]).copy()
+        if d.empty:
+            return None
+    
+        d = d.sort_values(metric, ascending=False)
+    
+        fig = px.bar(
+            d,
+            x="Name",
+            y=metric,
+            title=title,
+            color_discrete_sequence=[BAR_COLOR],
+        )
+    
+        # enforce the displayed order on the x-axis
+        fig.update_layout(
+            xaxis=dict(categoryorder="array", categoryarray=d["Name"].tolist()),
+            xaxis_title="Joueur",
+            yaxis_title=(unit if unit else metric),
+            margin=dict(l=20, r=20, t=55, b=90),
+            showlegend=False,
+        )
+        fig.update_xaxes(tickangle=-60)
+    
+        if team_mean is not None and pd.notna(team_mean):
+            fig.add_hline(
+                y=float(team_mean),
+                line_width=0.5,
+                line_color="black",
+            )
+    
+        if objective is not None and pd.notna(objective) and float(objective) > 0:
+            fig.add_hline(
+                y=float(objective),
+                line_width=1,
+                line_dash="dash",
+                line_color="#CFB013",
+                annotation_text="Objectif",
+                annotation_position="top right",
+            )
+    
+        return fig
+    
+    
+    # --- build figures ---
+    fig_distance = make_sorted_bar_with_lines(
+        base_df, "Distance", "Distance",
+        unit="m",
+        team_mean=team_means.get("Distance"),
+        objective=objectives.get("Distance"),
+    )
+    
+    fig_d15 = make_sorted_bar_with_lines(
+        base_df, "Distance 15km/h", "Distance 15km/h",
+        unit="m",
+        team_mean=team_means.get("Distance 15km/h"),
+        objective=objectives.get("Distance 15km/h"),
+    )
+    
+    fig_d25 = make_sorted_bar_with_lines(
+        base_df, "Distance 25km/h", "Distance 25km/h",
+        unit="m",
+        team_mean=team_means.get("Distance 25km/h"),
+        objective=objectives.get("Distance 25km/h"),
+    )
+    
+    fig_rpe = make_sorted_bar_with_lines(
+        base_df, "RPE", "RPE",
+        unit="",
+        team_mean=team_means.get("RPE"),
+        objective=objectives.get("RPE"),
+    )
+    
+    # --- 2x2 layout ---
+    colA, colB = st.columns(2)
+    
+    with colA:
+        if fig_distance is not None:
+            st.plotly_chart(fig_distance, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance).")
+    
+        if fig_d15 is not None:
+            st.plotly_chart(fig_d15, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance 15km/h).")
+    
+    with colB:
+        if fig_d25 is not None:
+            st.plotly_chart(fig_d25, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance 25km/h).")
+    
+        if fig_rpe is not None:
+            st.plotly_chart(fig_rpe, use_container_width=True)
+        else:
+            st.info("Données manquantes (RPE).")
+
         
     # === CHARGE DU JOUR : z-score vs moyenne par position (fallback global) ===
     st.markdown("### 🎯 Charge du jour")
@@ -1084,188 +1336,143 @@ elif page == "Entrainement":
     # components.html(html, height=height, width=width, scrolling=True)
 
         
-    st.markdown("### 📊 Analyse Semaine")
     
-    # ---- tasks allowed in weekly view ----
-    allowed_tasks_week = [
-        "WU + GAME + COMP", "WU + GAME",
-        "OPTI", "MESO", "DRILLS", "COMPENSATION",
-        "MACRO", "OPPO", "OPTI +", "OPTI J-1",
-        "MICRO", "COMPENSATION", "AUTRES", "DEV INDIV"
+        
+    # =========================
+    # Defaults for 3 graphs
+    #  - Type (Tâche): inferred from selected date above (dominant Type)
+    #  - Semaine(s): last 15 weeks
+    #  - Regrouper par: Jour
+    #  - Graph 1 vars: Distance + Distance 15km/h
+    #  - Graph 2 vars: N° Sprints + Distance 25km/h
+    #  - Graph 3 vars: Acc + Dec
+    # =========================
+    
+    def _to_num_series(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .replace("", pd.NA),
+            errors="coerce"
+        )
+    
+    def dominant_type_for_date(df: pd.DataFrame, sel_date, sel_ampm: str | None = None) -> str | None:
+        """Dominant Type for sel_date (and AM/PM if provided). Weighted by Duration if possible."""
+        if df.empty or "Date" not in df.columns or "Type" not in df.columns:
+            return None
+    
+        d = df.copy()
+        d["Date"] = pd.to_datetime(d["Date"], errors="coerce")
+        d = d[d["Date"].dt.date == sel_date].copy()
+        if d.empty:
+            return None
+    
+        if sel_ampm in ("AM", "PM") and "AMPM" in d.columns:
+            d["AMPM"] = d["AMPM"].astype(str).str.upper().str.strip()
+            d = d[d["AMPM"].eq(sel_ampm)].copy()
+            if d.empty:
+                return None
+    
+        d["Type"] = d["Type"].astype(str).str.upper().str.strip()
+    
+        if "Duration" in d.columns:
+            d["_dur"] = _to_num_series(d["Duration"]).fillna(0)
+            w = d.groupby("Type")["_dur"].sum().sort_values(ascending=False)
+        else:
+            w = d["Type"].value_counts()
+    
+        return None if w.empty else str(w.index[0])
+    
+    
+    st.markdown("#### 📈 Analyse Entrainement")
+    
+    # --- Shared filters (weeks + types) ---
+    col1, col2 = st.columns(2)
+    
+    # ✅ Default weeks = last 15
+    all_weeks = sorted(train_data["Semaine"].dropna().unique())
+    default_last15_weeks = all_weeks[-15:] if len(all_weeks) >= 15 else all_weeks
+    
+    with col1:
+        sel_sem = st.multiselect(
+            "Semaine(s)",
+            options=all_weeks,
+            default=default_last15_weeks,
+            key="analyse_train_semaines",
+        )
+    
+    # ✅ Default task based on "selected date above"
+    # assumes the date selector above uses key="train_date"
+    sel_date_above = st.session_state.get("train_date", None)
+    sel_ampm_above = st.session_state.get("ampm", None)  # optional
+    
+    types = sorted(train_data["Type"].dropna().unique())
+    default_task = None
+    if sel_date_above is not None:
+        default_task = dominant_type_for_date(train_data, sel_date_above, sel_ampm_above)
+    
+    default_task_list = [default_task] if default_task in types else []
+    
+    with col2:
+        sel_task = st.multiselect(
+            "Tâche(s)",
+            options=types,
+            default=default_task_list,
+            key="analyse_train_types",
+        )
+    
+    # --- 3 graphs loop ---
+    YVARS = [
+        "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
+        "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+        "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax",
+        "Acc", "Dec", "Amax", "Dmax", "HSR", "HSR/min",
+        "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
     ]
     
-    train_data_week = data[data["Type"].isin(allowed_tasks_week)].copy()
+    DEFAULT_VARS = {
+        1: ["Distance", "Distance 15km/h"],
+        2: ["N° Sprints", "Distance 25km/h"],
+        3: ["Acc", "Dec"],
+    }
     
-    # add Semaine if missing
-    if "Semaine" not in train_data_week.columns:
-        train_data_week["Semaine"] = train_data_week["Date"].dt.strftime("%Y-%W")
-    
-    weeks = sorted(train_data_week["Semaine"].dropna().unique())
-    selected_weeks = st.multiselect(
-        "Sélectionnez une ou plusieurs semaines",
-        options=weeks,
-        default=weeks[-1:] if weeks else []
-    )
-    
-    week_df = train_data_week[train_data_week["Semaine"].isin(selected_weeks)].copy()
-    if week_df.empty:
-        st.info("Aucune donnée d'entraînement pour les semaines sélectionnées.")
-        st.stop()
-    
-    # ---- clean numeric columns ----
-    df_week = week_df[["Semaine", "Name"] + [c for c in objective_fields if c in week_df.columns]].copy()
-    
-    for c in objective_fields:
-        if c in df_week.columns:
-            cleaned = (
-                df_week[c].astype(str)
-                           .str.replace(r"[^\d\-,\.]", "", regex=True)
-                           .str.replace(",", ".", regex=False)
-                           .replace("", pd.NA)
-            )
-            num = pd.to_numeric(cleaned, errors="coerce")
-            df_week[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
-    
-    # ---- aggregation: pure mean per week across players (Vmax = max) ----
-    metric_cols = [c for c in df_week.columns if c not in ["Name", "Semaine"]]
-    
-    # 1) mean for each player inside week (sessions -> player/week)
-    agg_first = {c: "sum" for c in metric_cols}
-    if "Vmax" in metric_cols:
-        agg_first["Vmax"] = "max"
-    
-    player_week = df_week.groupby(["Semaine", "Name"], as_index=False).agg(agg_first)
-    
-    # 2) mean across players for each week (keep Vmax max)
-    agg_second = {c: "sum" for c in metric_cols if c != "Vmax"}
-    if "Vmax" in metric_cols:
-        agg_second["Vmax"] = "max"
-    
-    df_collective = player_week.groupby("Semaine", as_index=False).agg(agg_second)
-    
-    # --- table: one row per player/week ---
-    df_week_mean = player_week.copy()
-    df_week_mean["Pos"] = df_week_mean["Name"].str.upper().map(player_positions)
-    players_only = df_week_mean.copy()
-    players_only["Pos"] = players_only["Pos"].fillna("NC")
-    
-    pos_order = ["DC", "M", "PIS", "ATT", "NC"]
-    blocks = []
-    
-    for pos in pos_order:
-        part = players_only[players_only["Pos"] == pos].sort_values("Name")
-        if part.empty:
-            continue
-        blocks.append(part)
-        avg = {"Name": f"Moyenne {pos}", "Pos": pos}
-        for c in objective_fields:
-            if c in part.columns:
-                m = part[c].mean(skipna=True)
-                avg[c] = round(m, 1) if c == "Vmax" else int(round(m, 0)) if pd.notna(m) else pd.NA
-        blocks.append(pd.DataFrame([avg]))
-    
-    df_sorted = pd.concat(blocks, ignore_index=True)
-    df_sorted.loc[df_sorted["Name"].str.startswith("Moyenne"), "Pos"] = ""
-    
-    # ---- display ----
-    display_cols = ["RPE", "Name", "Pos"] + [c for c in objective_fields if c != "RPE"]
-    display_cols = [c for c in display_cols if c in df_sorted.columns]
-    df_display = df_sorted[display_cols]
-    
-    def alternate_colors(row):
-        if row["Name"].startswith("Moyenne"):
-            return [""] * len(display_cols)
-        color = "#EDE8E8" if row.name % 2 == 0 else "white"
-        return [f"background-color:{color}"] * len(display_cols)
-    
-    def highlight_moyenne(row):
-        if row["Name"].startswith("Moyenne"):
-            return ["background-color:#CFB013; color:#000000;"] * len(display_cols)
-        return [""] * len(display_cols)
-    
-    styled = df_display.style
-    styled = styled.apply(alternate_colors, axis=1)
-    styled = styled.apply(highlight_moyenne, axis=1)
-    
-    fmt = {}
-    for c in display_cols:
-        if c == "Vmax":
-            fmt[c] = "{:.1f}"
-        elif c not in ["Name", "Pos", "RPE"]:
-            fmt[c] = "{:.0f}"
-    styled = styled.format(fmt)
-    
-    styled = styled.set_table_styles([
-        {"selector": "th",
-         "props": [("background-color", "#0031E3"),
-                   ("color", "white"),
-                   ("white-space", "nowrap")]},
-        {"selector": "th.row_heading, td.row_heading", "props": "display:none;"},
-        {"selector": "th.blank", "props": "display:none;"}
-    ], overwrite=False)
-    styled = styled.set_table_attributes('class="centered-table"')
-    
-    html_obj = styled.to_html()
-    total_rows = df_sorted.shape[0] + 1
-    iframe_height = 30 + total_rows * 28
-    
-    wrapper = f"""
-    <html>
-      <head>
-        <style>
-          body {{ margin:0; padding:0; }}
-          .centered-table{{border-collapse:collapse;width:100%;}}
-          .centered-table th{{font-size:10px;padding:6px 8px;text-align:center;}}
-          .centered-table td{{font-size:10px;padding:4px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
-          .centered-table th, .centered-table td{{border:1px solid #ddd;}}
-          .centered-table th{{background-color:#0031E3;color:white;}}
-        </style>
-      </head>
-      <body>{html_obj}</body>
-    </html>
-    """
-    st.markdown(wrapper, unsafe_allow_html=True)
-        
-    
-    
-    st.markdown("#### 📈 Analyse collective")
-    
-    # --- Filtres principaux partagés ---
-    col1, col2 = st.columns(2)
-    with col1:
-        semaines = sorted(train_data["Semaine"].dropna().unique())
-        sel_sem = st.multiselect("Semaine(s)", semaines)
-    with col2:
-        types = sorted(train_data["Type"].dropna().unique())
-        sel_task = st.multiselect("Tâche(s)", types)
-    
-    # --- Boucle pour 3 graphiques à la suite ---
     for i in range(1, 4):
         st.markdown(f"###### Graphique {i}")
         colx, coly = st.columns(2)
+    
         with coly:
             agg_options = {"Jour": "day", "Semaine": "week", "Mois": "month"}
+            # ✅ default "Jour" for all 3
+            default_x_idx = list(agg_options.keys()).index("Jour")
+    
             x_axis_mode = st.selectbox(
-                f"Regrouper par :", list(agg_options.keys()), key=f"xaxis_{i}"
+                "Regrouper par :",
+                list(agg_options.keys()),
+                index=default_x_idx,
+                key=f"xaxis_{i}",
             )
             agg_mode = agg_options[x_axis_mode]
+    
         with colx:
-            YVARS = [
-                "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
-                "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
-                "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax",
-                "Acc", "Dec", "Amax", "Dmax", "HSR", "HSR/min",
-                "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
-            ]
+            y_options = [v for v in YVARS if v in train_data.columns]
+    
+            wanted = DEFAULT_VARS.get(i, [])
+            default_vars = [v for v in wanted if v in y_options]
+    
+            # fallback if something missing in columns
+            if not default_vars:
+                default_vars = ["Distance"] if "Distance" in y_options else (y_options[:1] if y_options else [])
+    
             sel_y = st.multiselect(
                 f"Variable(s) à afficher (max 2) – Graphique {i}",
-                options=[v for v in YVARS if v in train_data.columns],
-                default=["Distance"],
+                options=y_options,
+                default=default_vars,
                 max_selections=2,
-                key=f"yvar_{i}"
+                key=f"yvar_{i}",
             )
     
-        # --- Filtrage ---
+        # --- Filtering ---
         filt = train_data.copy()
         if sel_sem:
             filt = filt[filt["Semaine"].isin(sel_sem)]
@@ -1286,19 +1493,14 @@ elif page == "Entrainement":
                 )
                 filt[col] = pd.to_numeric(filt[col], errors="coerce")
     
-        # --- Regroupement ---
+        # --- Grouping ---
         grp = None
         if sel_y:
-            # build grouping column
             if agg_mode == "day" and "Date" in filt.columns:
                 filt["XGroup"] = filt["Date"].dt.date
                 label_func = lambda d: d.strftime("%d.%m") if not pd.isnull(d) else ""
             elif agg_mode == "week":
-                filt["XGroup"] = (
-                    filt["Semaine"]
-                    if "Semaine" in filt.columns
-                    else filt["Date"].dt.strftime("%G-W%V")
-                )
+                filt["XGroup"] = filt["Semaine"] if "Semaine" in filt.columns else filt["Date"].dt.strftime("%G-W%V")
                 label_func = lambda d: f"S{int(d)}" if pd.notnull(d) and str(d).isdigit() else str(d)
             elif agg_mode == "month" and "Date" in filt.columns:
                 filt["XGroup"] = filt["Date"].dt.strftime("%Y-%m")
@@ -1309,34 +1511,20 @@ elif page == "Entrainement":
     
             if "XGroup" in filt.columns:
                 if agg_mode == "day":
-                    # simple mean by day
-                    grp = (
-                        filt.groupby("XGroup")[sel_y]
-                        .mean(numeric_only=True)
-                        .sort_index()
-                    )
+                    grp = filt.groupby("XGroup")[sel_y].mean(numeric_only=True).sort_index()
                 else:
-                    # 1️⃣ sum sessions inside each player/period
-                    inner = {}
-                    for v in sel_y:
-                        inner[v] = "max" if v == "Vmax" else "sum"
+                    inner = {v: ("max" if v == "Vmax" else "sum") for v in sel_y}
                     by_player = filt.groupby(["XGroup", "Name"], as_index=False).agg(inner)
     
-                    # 2️⃣ average across players (or max for Vmax)
-                    outer = {}
-                    for v in sel_y:
-                        outer[v] = "max" if v == "Vmax" else "mean"
-                    grp = (
-                        by_player.groupby("XGroup", as_index=True)
-                        .agg(outer)
-                        .sort_index()
-                    )
+                    outer = {v: ("max" if v == "Vmax" else "mean") for v in sel_y}
+                    grp = by_player.groupby("XGroup", as_index=True).agg(outer).sort_index()
     
         # --- Plot ---
         if grp is not None and not grp.empty:
             grp_plot = grp.reset_index()
             grp_plot = grp_plot.rename(columns={grp_plot.columns[0]: "XGroup"})
             grp_plot["X_fmt"] = grp_plot["XGroup"].apply(label_func)
+    
             y_arg = sel_y if len(sel_y) > 1 else sel_y[0]
             color_sequence = ["#0031E3", "#CFB013"] if len(sel_y) > 1 else ["#0031E3"]
     
@@ -1350,89 +1538,20 @@ elif page == "Entrainement":
                 text_auto=".0f",
                 color_discrete_sequence=color_sequence,
             )
-            fig.update_traces(
-                textposition="outside",
-                textfont_size=10,
-                textangle=0,
-                cliponaxis=False,
-            )
+            fig.update_traces(textposition="outside", textfont_size=10, cliponaxis=False)
             fig.update_layout(
                 xaxis_tickangle=0,
                 height=600,
                 xaxis_title=x_axis_mode,
                 yaxis_title="Valeur collective",
-                xaxis=dict(
-                    tickmode="array",
-                    tickvals=grp_plot["XGroup"],
-                    ticktext=grp_plot["X_fmt"],
-                ),
+                xaxis=dict(tickmode="array", tickvals=grp_plot["XGroup"], ticktext=grp_plot["X_fmt"]),
                 margin=dict(t=40, b=30, l=40, r=30),
             )
             st.plotly_chart(fig, use_container_width=True, key=f"plot_{i}")
         else:
             st.info("Aucune donnée pour ce graphique selon ces filtres ou variable non sélectionnée.")
 
-            
-    st.markdown("#### 🏃 Training load")
-    
-    # --- Data cleaning for Duration & RPE ---
-    filt = train_data.copy()
-    for col in ["Duration", "RPE"]:
-        if col in filt.columns:
-            filt[col] = (
-                filt[col]
-                .replace(["None", "nan", "NaN", ""], np.nan)
-                .astype(str)
-                .str.replace(r"[ \u202f\u00A0]", "", regex=True)
-                .str.replace(",", ".", regex=False)
-                .replace("", np.nan)
-            )
-            filt[col] = pd.to_numeric(filt[col], errors="coerce")
-    
-    # --- UA calculation ---
-    filt["UA"] = filt["Duration"] * filt["RPE"]
-    
-    # --- Check 'Semaine' column ---
-    if "Semaine" not in filt.columns:
-        st.warning("La colonne 'Semaine' est manquante.")
-        st.stop()
-    
-    # --- Aggregate UA per week ---
-    ua_per_week = (
-        filt.groupby("Semaine")["UA"].sum().reset_index()
-    )
-    # Ensure Semaine is int, if not already
-    ua_per_week["Semaine"] = pd.to_numeric(ua_per_week["Semaine"], errors="coerce")
-    
-    # --- Prepare weeks 1 to 20 for x-axis, merge with actual data (fill missing with 0) ---
-    weeks = pd.DataFrame({"Semaine": np.arange(1, 50)})
-    ua_per_week = weeks.merge(ua_per_week, on="Semaine", how="left").fillna(0)
-    
-    # --- Plot ---
-    fig = px.bar(
-        ua_per_week,
-        x="Semaine",
-        y="UA",
-        labels={"UA": "Charge hebdomadaire (UA)", "Semaine": "Semaine"},
-        title="Charge collective hebdomadaire (UA = Duration × RPE)",
-        text_auto='.0f',
-        color_discrete_sequence=["#0031E3"]
-    )
-    fig.update_traces(
-        textposition='outside',
-        textfont_size=10,
-        textangle=0,
-        cliponaxis=False
-    )
-    fig.update_layout(
-        xaxis=dict(tickmode="linear", tick0=1, dtick=1, range=[0.5, 20.5]),
-        height=400,
-        xaxis_title="Semaine",
-        yaxis_title="Charge hebdomadaire (UA)",
-        margin=dict(t=40, b=30, l=40, r=30)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
+        
     
     
     st.markdown("#### 📊 Analyse Individuelle")
@@ -2414,6 +2533,7 @@ elif page == "Match":
     
     st.dataframe(best_perf, use_container_width=True)
 
+
 # ── PAGE: PLAYER ANALYSIS ────────────────────────────────────────────────────
 
 
@@ -2887,3 +3007,357 @@ elif page == "Minutes de jeu":
         )
     
     st.plotly_chart(fig_sc, use_container_width=True)
+    
+elif page == "Training Load":
+    st.subheader("🏃 Training Load")
+
+    # ✅ DEFINE HERE (or move globally once)
+    objective_fields = [
+        "RPE",
+        "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+    ]
+
+    # ---- tasks allowed in weekly view ----
+    allowed_tasks_week = [
+        "WU + GAME + COMP", "WU + GAME",
+        "OPTI", "MESO", "DRILLS", "COMPENSATION",
+        "MACRO", "OPPO", "OPTI +", "OPTI J-1",
+        "MICRO", "COMPENSATION", "AUTRES", "DEV INDIV"
+    ]
+
+    train_data_week = data[data["Type"].isin(allowed_tasks_week)].copy()
+
+    # add Semaine if missing
+    if "Semaine" not in train_data_week.columns:
+        train_data_week["Semaine"] = train_data_week["Date"].dt.strftime("%Y-%W")
+
+    weeks = sorted(train_data_week["Semaine"].dropna().unique())
+    selected_weeks = st.multiselect(
+        "Sélectionnez une ou plusieurs semaines",
+        options=weeks,
+        default=weeks[-1:] if weeks else []
+    )
+
+    week_df = train_data_week[train_data_week["Semaine"].isin(selected_weeks)].copy()
+    if week_df.empty:
+        st.info("Aucune donnée d'entraînement pour les semaines sélectionnées.")
+        st.stop()
+
+    # ---- clean numeric columns ----
+    df_week = week_df[["Semaine", "Name"] + [c for c in objective_fields if c in week_df.columns]].copy()
+
+    for c in objective_fields:
+        if c in df_week.columns:
+            cleaned = (
+                df_week[c].astype(str)
+                           .str.replace(r"[^\d\-,\.]", "", regex=True)
+                           .str.replace(",", ".", regex=False)
+                           .replace("", pd.NA)
+            )
+            num = pd.to_numeric(cleaned, errors="coerce")
+            df_week[c] = num.round(1) if c == "Vmax" else num.round(0).astype("Int64")
+
+    # ... keep the rest of your block unchanged ...
+    
+    # ---- aggregation: pure mean per week across players (Vmax = max) ----
+    metric_cols = [c for c in df_week.columns if c not in ["Name", "Semaine"]]
+    
+    # 1) mean for each player inside week (sessions -> player/week)
+    agg_first = {c: "sum" for c in metric_cols}
+    if "Vmax" in metric_cols:
+        agg_first["Vmax"] = "max"
+    
+    player_week = df_week.groupby(["Semaine", "Name"], as_index=False).agg(agg_first)
+    
+    # 2) mean across players for each week (keep Vmax max)
+    agg_second = {c: "sum" for c in metric_cols if c != "Vmax"}
+    if "Vmax" in metric_cols:
+        agg_second["Vmax"] = "max"
+    
+    df_collective = player_week.groupby("Semaine", as_index=False).agg(agg_second)
+    
+    # --- table: one row per player/week ---
+    df_week_mean = player_week.copy()
+    df_week_mean["Pos"] = df_week_mean["Name"].str.upper().map(player_positions)
+    players_only = df_week_mean.copy()
+    players_only["Pos"] = players_only["Pos"].fillna("NC")
+    
+    pos_order = ["DC", "M", "PIS", "ATT", "NC"]
+    blocks = []
+    
+    for pos in pos_order:
+        part = players_only[players_only["Pos"] == pos].sort_values("Name")
+        if part.empty:
+            continue
+        blocks.append(part)
+        avg = {"Name": f"Moyenne {pos}", "Pos": pos}
+        for c in objective_fields:
+            if c in part.columns:
+                m = part[c].mean(skipna=True)
+                avg[c] = round(m, 1) if c == "Vmax" else int(round(m, 0)) if pd.notna(m) else pd.NA
+        blocks.append(pd.DataFrame([avg]))
+    
+    df_sorted = pd.concat(blocks, ignore_index=True)
+    df_sorted.loc[df_sorted["Name"].str.startswith("Moyenne"), "Pos"] = ""
+    
+    # ---- display ----
+    display_cols = ["RPE", "Name", "Pos"] + [c for c in objective_fields if c != "RPE"]
+    display_cols = [c for c in display_cols if c in df_sorted.columns]
+    df_display = df_sorted[display_cols]
+    
+    def alternate_colors(row):
+        if row["Name"].startswith("Moyenne"):
+            return [""] * len(display_cols)
+        color = "#EDE8E8" if row.name % 2 == 0 else "white"
+        return [f"background-color:{color}"] * len(display_cols)
+    
+    def highlight_moyenne(row):
+        if row["Name"].startswith("Moyenne"):
+            return ["background-color:#CFB013; color:#000000;"] * len(display_cols)
+        return [""] * len(display_cols)
+    
+    styled = df_display.style
+    styled = styled.apply(alternate_colors, axis=1)
+    styled = styled.apply(highlight_moyenne, axis=1)
+    
+    fmt = {}
+    for c in display_cols:
+        if c == "Vmax":
+            fmt[c] = "{:.1f}"
+        elif c not in ["Name", "Pos", "RPE"]:
+            fmt[c] = "{:.0f}"
+    styled = styled.format(fmt)
+    
+    styled = styled.set_table_styles([
+        {"selector": "th",
+         "props": [("background-color", "#0031E3"),
+                   ("color", "white"),
+                   ("white-space", "nowrap")]},
+        {"selector": "th.row_heading, td.row_heading", "props": "display:none;"},
+        {"selector": "th.blank", "props": "display:none;"}
+    ], overwrite=False)
+    styled = styled.set_table_attributes('class="centered-table"')
+    
+    html_obj = styled.to_html()
+    total_rows = df_sorted.shape[0] + 1
+    iframe_height = 30 + total_rows * 28
+    
+    wrapper = f"""
+    <html>
+      <head>
+        <style>
+          body {{ margin:0; padding:0; }}
+          .centered-table{{border-collapse:collapse;width:100%;}}
+          .centered-table th{{font-size:10px;padding:6px 8px;text-align:center;}}
+          .centered-table td{{font-size:10px;padding:4px 6px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
+          .centered-table th, .centered-table td{{border:1px solid #ddd;}}
+          .centered-table th{{background-color:#0031E3;color:white;}}
+        </style>
+      </head>
+      <body>{html_obj}</body>
+    </html>
+    """
+    st.markdown(wrapper, unsafe_allow_html=True)
+
+
+
+
+
+    # =========================
+    # 🏃 Training load (UA)
+    # =========================
+    st.markdown("#### 🏃 Charge UA")
+    
+    # local numeric cleaner (if not defined globally)
+    def to_num(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .replace("", pd.NA),
+            errors="coerce"
+        )
+
+    filt = train_data_week.copy()
+
+    for col in ["Duration", "RPE"]:
+        if col in filt.columns:
+            filt[col] = to_num(filt[col])
+
+    if "Duration" not in filt.columns or "RPE" not in filt.columns:
+        st.info("Colonnes Duration/RPE manquantes pour calculer UA.")
+        st.stop()
+
+    filt["UA"] = filt["Duration"] * filt["RPE"]
+
+    if "Semaine" not in filt.columns:
+        st.warning("La colonne 'Semaine' est manquante.")
+        st.stop()
+
+    ua_per_week = filt.groupby("Semaine")["UA"].sum().reset_index()
+
+    # If Semaine is not numeric week number, keep it categorical
+    # (your old code forces 1..20; that only works if Semaine is 1..20)
+    fig = px.bar(
+        ua_per_week.sort_values("Semaine"),
+        x="Semaine",
+        y="UA",
+        labels={"UA": "Charge hebdomadaire (UA)", "Semaine": "Semaine"},
+        title="Charge collective hebdomadaire (UA = Duration × RPE)",
+        text_auto=".0f",
+        color_discrete_sequence=["#0031E3"]
+    )
+    fig.update_traces(textposition="outside", textfont_size=10, cliponaxis=False)
+    fig.update_layout(
+        height=450,
+        xaxis_title="Semaine",
+        yaxis_title="Charge hebdomadaire (UA)",
+        margin=dict(t=40, b=30, l=40, r=30)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+    st.markdown("#### 📈 Analyse Semaine")
+    
+    # --- Filtres principaux partagés ---
+    col1, col2 = st.columns(2)
+    with col1:
+        semaines = sorted(train_data["Semaine"].dropna().unique())
+        sel_sem = st.multiselect("Semaine(s)", semaines)
+    with col2:
+        types = sorted(train_data["Type"].dropna().unique())
+        sel_task = st.multiselect("Tâche(s)", types)
+    
+    # --- Boucle pour 3 graphiques à la suite ---
+    for i in range(1, 4):
+        st.markdown(f"###### Graphique {i}")
+        colx, coly = st.columns(2)
+        with coly:
+            agg_options = {"Jour": "day", "Semaine": "week", "Mois": "month"}
+            x_axis_mode = st.selectbox(
+                f"Regrouper par :", list(agg_options.keys()), key=f"xaxis_{i}"
+            )
+            agg_mode = agg_options[x_axis_mode]
+        with colx:
+            YVARS = [
+                "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
+                "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+                "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax",
+                "Acc", "Dec", "Amax", "Dmax", "HSR", "HSR/min",
+                "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
+            ]
+            sel_y = st.multiselect(
+                f"Variable(s) à afficher (max 2) – Graphique {i}",
+                options=[v for v in YVARS if v in train_data.columns],
+                default=["Distance"],
+                max_selections=2,
+                key=f"yvar_{i}"
+            )
+    
+        # --- Filtrage ---
+        filt = train_data.copy()
+        if sel_sem:
+            filt = filt[filt["Semaine"].isin(sel_sem)]
+        if sel_task:
+            filt = filt[filt["Type"].isin(sel_task)]
+        if "Date" in filt.columns:
+            filt["Date"] = pd.to_datetime(filt["Date"], errors="coerce")
+    
+        for col in sel_y:
+            if col in filt.columns:
+                filt[col] = (
+                    filt[col]
+                    .replace(["None", "nan", "NaN", ""], np.nan)
+                    .astype(str)
+                    .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+                    .str.replace(",", ".", regex=False)
+                    .replace("", np.nan)
+                )
+                filt[col] = pd.to_numeric(filt[col], errors="coerce")
+    
+        # --- Regroupement ---
+        grp = None
+        if sel_y:
+            # build grouping column
+            if agg_mode == "day" and "Date" in filt.columns:
+                filt["XGroup"] = filt["Date"].dt.date
+                label_func = lambda d: d.strftime("%d.%m") if not pd.isnull(d) else ""
+            elif agg_mode == "week":
+                filt["XGroup"] = (
+                    filt["Semaine"]
+                    if "Semaine" in filt.columns
+                    else filt["Date"].dt.strftime("%G-W%V")
+                )
+                label_func = lambda d: f"S{int(d)}" if pd.notnull(d) and str(d).isdigit() else str(d)
+            elif agg_mode == "month" and "Date" in filt.columns:
+                filt["XGroup"] = filt["Date"].dt.strftime("%Y-%m")
+                label_func = lambda d: str(d)
+            else:
+                filt["XGroup"] = filt["Date"].dt.date if "Date" in filt.columns else None
+                label_func = lambda d: str(d)
+    
+            if "XGroup" in filt.columns:
+                if agg_mode == "day":
+                    # simple mean by day
+                    grp = (
+                        filt.groupby("XGroup")[sel_y]
+                        .mean(numeric_only=True)
+                        .sort_index()
+                    )
+                else:
+                    # 1️⃣ sum sessions inside each player/period
+                    inner = {}
+                    for v in sel_y:
+                        inner[v] = "max" if v == "Vmax" else "sum"
+                    by_player = filt.groupby(["XGroup", "Name"], as_index=False).agg(inner)
+    
+                    # 2️⃣ average across players (or max for Vmax)
+                    outer = {}
+                    for v in sel_y:
+                        outer[v] = "max" if v == "Vmax" else "mean"
+                    grp = (
+                        by_player.groupby("XGroup", as_index=True)
+                        .agg(outer)
+                        .sort_index()
+                    )
+    
+        # --- Plot ---
+        if grp is not None and not grp.empty:
+            grp_plot = grp.reset_index()
+            grp_plot = grp_plot.rename(columns={grp_plot.columns[0]: "XGroup"})
+            grp_plot["X_fmt"] = grp_plot["XGroup"].apply(label_func)
+            y_arg = sel_y if len(sel_y) > 1 else sel_y[0]
+            color_sequence = ["#0031E3", "#CFB013"] if len(sel_y) > 1 else ["#0031E3"]
+    
+            fig = px.bar(
+                grp_plot,
+                x="XGroup",
+                y=y_arg,
+                barmode="group",
+                labels={"value": "Valeur collective"},
+                title=f"Collectif – {' & '.join(sel_y)} par {x_axis_mode.lower()}",
+                text_auto=".0f",
+                color_discrete_sequence=color_sequence,
+            )
+            fig.update_traces(
+                textposition="outside",
+                textfont_size=10,
+                textangle=0,
+                cliponaxis=False,
+            )
+            fig.update_layout(
+                xaxis_tickangle=0,
+                height=600,
+                xaxis_title=x_axis_mode,
+                yaxis_title="Valeur collective",
+                xaxis=dict(
+                    tickmode="array",
+                    tickvals=grp_plot["XGroup"],
+                    ticktext=grp_plot["X_fmt"],
+                ),
+                margin=dict(t=40, b=30, l=40, r=30),
+            )
+            st.plotly_chart(fig, use_container_width=True, key=f"plot_{i}")
+        else:
+            st.info("Aucune donnée pour ce graphique selon ces filtres ou variable non sélectionnée.")
