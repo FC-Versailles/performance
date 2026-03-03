@@ -420,36 +420,36 @@ elif page == "Entrainement":
     # 1) Hard-coded TARGETS per Type (EDIT ONLY HERE)
     TYPE_TARGETS = {
         "OPTI": {
-            "Duration": 60, "Distance": 4500, "Distance 15km/h": 900, "Distance 15-20km/h": 600,
-            "Distance 20-25km/h": 180, "Distance 25km/h": 40, "Acc": 35, "Dec": 35,
-            "Vmax": 29.5, "Distance 90% Vmax": 120
+            "Duration": 52, "Distance": 3689, "Distance 15km/h": 256, "Distance 15-20km/h": 212,
+            "Distance 20-25km/h": 40, "Distance 25km/h": 4, "Acc": 52, "Dec": 39,
+            "Vmax": 23, "Distance 90% Vmax": 0
         },
         "MESO": {
-            "Duration": 75, "Distance": 5500, "Distance 15km/h": 1100, "Distance 15-20km/h": 700,
-            "Distance 20-25km/h": 220, "Distance 25km/h": 60, "Acc": 45, "Dec": 45,
-            "Vmax": 30.5, "Distance 90% Vmax": 150
+            "Duration": 78, "Distance": 5762, "Distance 15km/h": 710, "Distance 15-20km/h": 535,
+            "Distance 20-25km/h": 152, "Distance 25km/h": 24, "Acc": 72, "Dec": 63,
+            "Vmax": 30, "Distance 90% Vmax": 6
         },
         "MICRO": {
-            "Duration": 50, "Distance": 3800, "Distance 15km/h": 700, "Distance 15-20km/h": 450,
-            "Distance 20-25km/h": 120, "Distance 25km/h": 20, "Acc": 25, "Dec": 25,
-            "Vmax": 28.5, "Distance 90% Vmax": 80
+            "Duration": 57, "Distance": 4228, "Distance 15km/h": 622, "Distance 15-20km/h": 359,
+            "Distance 20-25km/h": 153, "Distance 25km/h": 110, "Acc": 46, "Dec": 59,
+            "Vmax": 3, "Distance 90% Vmax": 22
         },
         "OPTI J-1": {
-            "Duration": 40, "Distance": 3200, "Distance 15km/h": 500, "Distance 15-20km/h": 300,
-            "Distance 20-25km/h": 80, "Distance 25km/h": 10, "Acc": 20, "Dec": 20,
+            "Duration": 48, "Distance": 2861, "Distance 15km/h": 298, "Distance 15-20km/h": 213,
+            "Distance 20-25km/h": 69, "Distance 25km/h": 15, "Acc": 33, "Dec": 27,
             "Vmax": 27.5, "Distance 90% Vmax": 50
         },
         "MACRO": {
-        "Duration": 80,
+        "Duration": 78,
         "Distance": 7371,
         "Distance 15km/h": 1507,
-        "Distance 15-20km/h": 750,
-        "Distance 20-25km/h": 260,
+        "Distance 15-20km/h": 874,
+        "Distance 20-25km/h": 460,
         "Distance 25km/h": 152,
         "Acc": 64,
         "Dec": 59,
-        "Vmax": 30.5,
-        "Distance 90% Vmax": 160,
+        "Vmax": 30,
+        "Distance 90% Vmax": 6,
         },
     }
     
@@ -615,6 +615,8 @@ elif page == "Entrainement":
             f"Plusieurs Types détectés ce jour ({', '.join(unique_types)}). "
             f"Objectifs appliqués sur le Type dominant : {day_type}"
         )
+
+    st.markdown("##### 📌 Objectifs de la séance")    
     
     targets = TYPE_TARGETS[day_type]
     
@@ -665,17 +667,164 @@ elif page == "Entrainement":
     except Exception:
         indicateur = 0
     
+    
+    st.markdown("##### ✅ Bilan de la séance")  
     st.markdown(
-        f"###### Objectifs du {sel_date} &nbsp; | &nbsp; "
-        f"Session : <b>{sel_ampm}</b> &nbsp; | &nbsp; "
-        f"Type : <b>{day_type}</b> &nbsp; | &nbsp; "
-        f"Coef : <b>{coef:.2f}</b> &nbsp; | &nbsp; "
+        f"###### Type : <b>{day_type}</b> &nbsp; | &nbsp;"
         f"Temps total : <b>{max_duration:.0f} min</b> &nbsp; | &nbsp; "
         f"Temps effectif : <b>{max_teffectif:.0f} min</b> &nbsp; | &nbsp; "
-        f"RPE estimé : <b>{session_ERPE:.0f}</b> &nbsp; | &nbsp; "
-        f"Indicateur : <b>{indicateur:.1f}%</b>",
+        f"Ratio : <b>{indicateur:.1f}%</b> &nbsp; | &nbsp; "
+        f"RPE estimé : <b>{session_ERPE:.0f}</b>",
+        
         unsafe_allow_html=True
     )
+    
+    
+    # --- Session insight helpers (your subset) ------------------------------------
+    INSIGHT_ORDER = [
+        "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec"
+    ]
+    
+    UNITS = {
+        "Distance": "m",
+        "Distance 15km/h": "m",
+        "Distance 15-20km/h": "m",
+        "Distance 20-25km/h": "m",
+        "Distance 25km/h": "m",
+        "Acc": "",
+        "Dec": ""
+    }
+    
+    def fmt_value(var: str, x: float) -> str:
+        if pd.isna(x):
+            return "—"
+        if var in {"Vmax", "RPE"}:
+            return f"{float(x):.1f}"
+        return f"{float(x):.0f}"
+    
+    def badge_from_pct(pct) -> tuple[str, str, str]:
+        """
+        pct can be float or NaN
+        returns (emoji, html_color, label)
+        """
+        if pct is None or pd.isna(pct):
+            return ("⚪️", "#9E9E9E", "N/A")
+        pct = float(pct)
+        if pct >= 5:
+            return ("🟢", "#2E7D32", f"{pct:+.1f}%")
+        if pct <= -5:
+            return ("🔴", "#C62828", f"{pct:+.1f}%")
+        return ("⚪️", "#616161", f"{pct:+.1f}%")
+    
+    # ---------------- FIX: robust numeric conversion ----------------
+    def to_num_series(s: pd.Series) -> pd.Series:
+        """Cleans strings like '1 234', '1 234', '1,234', '1234m' -> numeric."""
+        return pd.to_numeric(
+            s.astype(str)
+             .replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces incl. narrow NBSP
+             .str.replace(",", ".", regex=False)
+             .str.replace(r"[^\d\.\-]", "", regex=True),       # keep digits . -
+            errors="coerce"
+        )
+    
+    # ---------------- FIX: compute means on a SAFE base ----------------
+    # filtered_df should be your session dataframe. If it's empty -> show info.
+    if ("filtered_df" not in locals()) or (filtered_df is None) or (not isinstance(filtered_df, pd.DataFrame)) or filtered_df.empty:
+        st.info("Impossible de calculer la moyenne de séance (données manquantes).")
+    else:
+        base = filtered_df.copy()
+    
+        # (Optional but recommended) remove aggregate rows if they exist
+        if "Name" in base.columns:
+            base = base[~base["Name"].astype(str).str.startswith("Moyenne", na=False)].copy()
+    
+        # Ensure numeric for insight vars
+        session_means = {}
+        present_vars = [v for v in INSIGHT_ORDER if v in base.columns]
+    
+        for v in present_vars:
+            base[v] = to_num_series(base[v])
+            session_means[v] = base[v].mean(skipna=True)
+    
+        # Build objective values (targets x coef)
+        obj_vals = {}
+        if "targets" in locals() and isinstance(targets, dict):
+            for v in INSIGHT_ORDER:
+                tgt = targets.get(v, None)
+                obj_vals[v] = float(tgt) * float(coef) if tgt is not None and pd.notna(tgt) else None
+        else:
+            obj_vals = {v: None for v in INSIGHT_ORDER}
+    
+        # Decide if we have at least ONE computable mean
+        available_vars = [v for v in INSIGHT_ORDER if (v in session_means) and pd.notna(session_means[v])]
+    
+        # Extra diagnostics to avoid "false missing" situations:
+        # - columns exist but all NaN after cleaning
+        if not available_vars:
+            if not present_vars:
+                st.info("Impossible de calculer la moyenne de séance (variables absentes dans filtered_df).")
+                st.caption(f"Variables attendues: {', '.join(INSIGHT_ORDER)}")
+            else:
+                # present but all NaN
+                all_nan_vars = [v for v in present_vars if base[v].notna().sum() == 0]
+                st.info("Impossible de calculer la moyenne de séance (données manquantes).")
+                st.caption(
+                    "Variables présentes mais vides/NaN après nettoyage: "
+                    + (", ".join(all_nan_vars) if all_nan_vars else "—")
+                )
+        else:
+            cols = st.columns(4)
+    
+            for i, v in enumerate(available_vars):
+                mean_v = session_means.get(v, np.nan)
+                obj_v  = obj_vals.get(v, None)
+    
+                # % variation vs objective
+                pct = None
+                if obj_v is not None and pd.notna(obj_v) and float(obj_v) != 0 and pd.notna(mean_v):
+                    pct = (float(mean_v) - float(obj_v)) / float(obj_v) * 100.0
+    
+                emoji, color, pct_txt = badge_from_pct(pct)
+                unit = UNITS.get(v, "")
+    
+                # show objective number too when available
+                obj_txt = ""
+                if obj_v is not None and pd.notna(obj_v):
+                    obj_txt = f"<span style='color:#777'>obj {fmt_value(v, float(obj_v))}{(' ' + unit) if unit else ''}</span>"
+    
+                card = f"""
+                <div style="
+                    border:1px solid #e6e6e6;
+                    border-radius:12px;
+                    padding:10px 12px;
+                    margin:6px 0;
+                    background:#ffffff;
+                    box-shadow:0 1px 2px rgba(0,0,0,0.04);
+                ">
+                  <div style="font-size:12px;color:#333;font-weight:600;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    {v}
+                  </div>
+                  <div style="display:flex;align-items:baseline;gap:10px;">
+                    <div style="font-size:22px;font-weight:800;color:#111;">
+                      {fmt_value(v, float(mean_v))}{(' ' + unit) if unit else ''}
+                    </div>
+                    <div style="font-size:13px;font-weight:700;color:{color};">
+                      {emoji} {pct_txt}
+                    </div>
+                  </div>
+                  <div style="font-size:12px;margin-top:4px;">
+                    {obj_txt}
+                  </div>
+                </div>
+                """
+                with cols[i % 4]:
+                    st.markdown(card, unsafe_allow_html=True)
+
+
+
+
     
     # 9) Table base: raw values (player rows)
     df_ent = filtered_df[["Name"] + [c for c in objective_fields if c in filtered_df.columns]].copy()
