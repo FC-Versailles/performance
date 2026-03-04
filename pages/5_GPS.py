@@ -682,7 +682,7 @@ elif page == "Entrainement":
     
     # --- Session insight helpers (your subset) ------------------------------------
     INSIGHT_ORDER = [
-        "Distance", "Distance 15km/h", "Distance 15-20km/h",
+        "Distance", "Distance 15km/h",
         "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec"
     ]
     
@@ -708,14 +708,20 @@ elif page == "Entrainement":
         pct can be float or NaN
         returns (emoji, html_color, label)
         """
+    
         if pct is None or pd.isna(pct):
             return ("⚪️", "#9E9E9E", "N/A")
+    
         pct = float(pct)
-        if pct >= 5:
+        abs_pct = abs(pct)
+    
+        if abs_pct <= 10:
             return ("🟢", "#2E7D32", f"{pct:+.1f}%")
-        if pct <= -5:
-            return ("🔴", "#C62828", f"{pct:+.1f}%")
-        return ("⚪️", "#616161", f"{pct:+.1f}%")
+    
+        if abs_pct <= 15:
+            return ("🟠", "#EF6C00", f"{pct:+.1f}%")
+    
+        return ("🔴", "#C62828", f"{pct:+.1f}%")
     
     # ---------------- FIX: robust numeric conversion ----------------
     def to_num_series(s: pd.Series) -> pd.Series:
@@ -775,7 +781,7 @@ elif page == "Entrainement":
                     + (", ".join(all_nan_vars) if all_nan_vars else "—")
                 )
         else:
-            cols = st.columns(4)
+            cols = st.columns(3)
     
             for i, v in enumerate(available_vars):
                 mean_v = session_means.get(v, np.nan)
@@ -819,7 +825,7 @@ elif page == "Entrainement":
                   </div>
                 </div>
                 """
-                with cols[i % 4]:
+                with cols[i % 3]:
                     st.markdown(card, unsafe_allow_html=True)
 
 
