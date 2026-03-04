@@ -1547,7 +1547,7 @@ elif page == "Entrainement":
     
     # ✅ Default weeks = last 15
     all_weeks = sorted(train_data["Semaine"].dropna().unique())
-    default_last15_weeks = all_weeks[-15:] if len(all_weeks) >= 15 else all_weeks
+    default_last15_weeks = all_weeks[-8:] if len(all_weeks) >= 8 else all_weeks
     
     with col1:
         sel_sem = st.multiselect(
