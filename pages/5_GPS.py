@@ -1164,19 +1164,19 @@ elif page == "Entrainement":
     BAR_COLOR = "#0031E3"
     METRICS = ["Distance", "Distance 15km/h", "Distance 25km/h", "RPE"]
     
-    # --- base dataframe (players only) ---
+    # --- base dataframe (players only) for the SELECTED session ---
     base_df = (df_ent.copy() if "df_ent" in locals() else filtered_df.copy())
     base_df = base_df[~base_df["Name"].astype(str).str.startswith("Moyenne", na=False)].copy()
     
-    # numeric coercion
+    # numeric coercion (session)
     for c in METRICS:
         if c in base_df.columns:
             base_df[c] = pd.to_numeric(base_df[c], errors="coerce")
     
-    # team means
+    # team means (selected session)
     team_means = {m: (base_df[m].mean(skipna=True) if m in base_df.columns else None) for m in METRICS}
     
-    # objectives (targets x coef) — only if targets exists and has the key
+    # objectives (targets x coef)
     objectives = {}
     if "targets" in locals() and isinstance(targets, dict):
         for m in METRICS:
@@ -1185,7 +1185,87 @@ elif page == "Entrainement":
     else:
         objectives = {m: None for m in METRICS}
     
+    # -------------------------------------------------------------------
+    # ✅ NEW: "Type mean" across ALL sessions of the same Type (e.g. MACRO)
+    # -------------------------------------------------------------------
+    def _clean_num(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces / NBSP
+             .str.replace(",", ".", regex=False)
+             .str.replace(r"[^\d\.\-]", "", regex=True),
+            errors="coerce",
+        )
     
+    def compute_type_team_mean(
+        df_all: pd.DataFrame,
+        metric: str,
+        type_value: str,
+        allowed_types: list[str] | None = None,
+    ) -> float | None:
+        """
+        Returns the team average for `metric` over all sessions with Type==type_value.
+        We compute a per-session team mean (mean across players) then average over sessions.
+        Session key: Date + AMPM (if exists), else Date.
+        """
+        if metric not in df_all.columns or "Type" not in df_all.columns or "Date" not in df_all.columns:
+            return None
+    
+        d = df_all.copy()
+        d["Type"] = d["Type"].astype(str).str.upper().str.strip()
+        d["Date"] = pd.to_datetime(d["Date"], errors="coerce")
+        d = d.dropna(subset=["Date"])
+    
+        if allowed_types is not None:
+            d = d[d["Type"].isin([t.upper().strip() for t in allowed_types])]
+    
+        tv = str(type_value).upper().strip()
+        d = d[d["Type"].eq(tv)]
+        if d.empty:
+            return None
+    
+        # session key
+        if "AMPM" in d.columns and d["AMPM"].notna().any():
+            d["AMPM"] = d["AMPM"].astype(str).str.upper().str.strip()
+            d["SessionKey"] = d["Date"].dt.date.astype(str) + " | " + d["AMPM"].replace({"": "NA"}).fillna("NA")
+        else:
+            d["SessionKey"] = d["Date"].dt.date.astype(str)
+    
+        # clean numeric
+        d[metric] = _clean_num(d[metric])
+    
+        # aggregate per player inside a session (sum for distance metrics, mean for RPE)
+        if metric == "RPE":
+            by_player = d.groupby(["SessionKey", "Name"], as_index=False)[metric].mean()
+            team_by_session = by_player.groupby("SessionKey")[metric].mean()  # mean across players
+        else:
+            by_player = d.groupby(["SessionKey", "Name"], as_index=False)[metric].sum()
+            team_by_session = by_player.groupby("SessionKey")[metric].mean()  # mean across players
+    
+        out = team_by_session.mean(skipna=True)
+        return None if pd.isna(out) else float(out)
+    
+    # Type of the selected day (you already compute it earlier)
+    # If you prefer, use: session_type = day_type
+    session_type = day_type if "day_type" in locals() else (filtered_df["Type"].iloc[0] if "Type" in filtered_df.columns else None)
+    
+    # compute "Type mean" values for titles
+    type_means = {}
+    if session_type is not None:
+        for m in METRICS:
+            type_means[m] = compute_type_team_mean(
+                df_all=data,
+                metric=m,
+                type_value=session_type,
+                allowed_types=allowed_tasks if "allowed_tasks" in locals() else None,
+            )
+    else:
+        type_means = {m: None for m in METRICS}
+    
+    # -------------------------------------------------------------------
+    # Plot function (title includes "Moyenne {Type}: value")
+    # -------------------------------------------------------------------
     def make_sorted_bar_with_lines(
         df: pd.DataFrame,
         metric: str,
@@ -1193,6 +1273,8 @@ elif page == "Entrainement":
         unit: str = "",
         team_mean: float | None = None,
         objective: float | None = None,
+        session_type: str | None = None,
+        type_mean: float | None = None,
     ):
         if metric not in df.columns:
             return None
@@ -1203,43 +1285,73 @@ elif page == "Entrainement":
     
         d = d.sort_values(metric, ascending=False)
     
+        # ---- Title: add "Type mean" next to title ----
+        title_text = title
+        if session_type and type_mean is not None and pd.notna(type_mean):
+            fmt_tm = "{:.1f}" if metric == "RPE" else "{:.0f}"
+            title_text = (
+                f"{title}  |  Moyenne {str(session_type).upper().strip()}: "
+                f"{fmt_tm.format(float(type_mean))}{(' ' + unit) if unit else ''}"
+            )
+    
         fig = px.bar(
             d,
             x="Name",
             y=metric,
-            title=title,
+            title=title_text,
             color_discrete_sequence=[BAR_COLOR],
         )
     
-        # enforce the displayed order on the x-axis
         fig.update_layout(
             xaxis=dict(categoryorder="array", categoryarray=d["Name"].tolist()),
             xaxis_title="Joueur",
             yaxis_title=(unit if unit else metric),
-            margin=dict(l=20, r=20, t=55, b=90),
+            margin=dict(l=20, r=20, t=60, b=90),
             showlegend=False,
         )
         fig.update_xaxes(tickangle=-60)
     
+        # helper for line labels
+        def _fmt(v: float) -> str:
+            if pd.isna(v):
+                return ""
+            if metric == "RPE":
+                return f"{float(v):.1f}{(' ' + unit) if unit else ''}"
+            return f"{float(v):.0f}{(' ' + unit) if unit else ''}"
+    
+        # ---- Team mean line + label ----
+        # ---- Team mean line + label ----
         if team_mean is not None and pd.notna(team_mean):
             fig.add_hline(
                 y=float(team_mean),
-                line_width=0.5,
+                line_width=0.8,
                 line_color="black",
+                annotation_text=f"Moyenne équipe: {_fmt(float(team_mean))}",
+                annotation_position="top left",
+                annotation_font=dict(size=12, color="black"),
+                annotation_bgcolor="rgba(255,255,255,0.9)",
+                annotation_bordercolor="black",
+                annotation_borderwidth=1,
+                annotation_borderpad=3,
             )
-    
+        
+        # ---- Objective line + label ----
         if objective is not None and pd.notna(objective) and float(objective) > 0:
             fig.add_hline(
                 y=float(objective),
                 line_width=1,
                 line_dash="dash",
                 line_color="#CFB013",
-                annotation_text="Objectif",
+                annotation_text=f"Objectif: {_fmt(float(objective))}",
                 annotation_position="top right",
+                annotation_font=dict(size=12, color="#333"),
+                annotation_bgcolor="rgba(255,255,255,0.9)",
+                annotation_bordercolor="#CFB013",
+                annotation_borderwidth=1,
+                annotation_borderpad=3,
             )
     
         return fig
-    
     
     # --- build figures ---
     fig_distance = make_sorted_bar_with_lines(
@@ -1247,6 +1359,8 @@ elif page == "Entrainement":
         unit="m",
         team_mean=team_means.get("Distance"),
         objective=objectives.get("Distance"),
+        session_type=session_type,
+        type_mean=type_means.get("Distance"),
     )
     
     fig_d15 = make_sorted_bar_with_lines(
@@ -1254,6 +1368,8 @@ elif page == "Entrainement":
         unit="m",
         team_mean=team_means.get("Distance 15km/h"),
         objective=objectives.get("Distance 15km/h"),
+        session_type=session_type,
+        type_mean=type_means.get("Distance 15km/h"),
     )
     
     fig_d25 = make_sorted_bar_with_lines(
@@ -1261,6 +1377,8 @@ elif page == "Entrainement":
         unit="m",
         team_mean=team_means.get("Distance 25km/h"),
         objective=objectives.get("Distance 25km/h"),
+        session_type=session_type,
+        type_mean=type_means.get("Distance 25km/h"),
     )
     
     fig_rpe = make_sorted_bar_with_lines(
@@ -1268,8 +1386,11 @@ elif page == "Entrainement":
         unit="",
         team_mean=team_means.get("RPE"),
         objective=objectives.get("RPE"),
+        session_type=session_type,
+        type_mean=type_means.get("RPE"),
     )
     
+    # --- 2x2 layout ---
     # --- 2x2 layout ---
     colA, colB = st.columns(2)
     
@@ -1294,42 +1415,61 @@ elif page == "Entrainement":
             st.plotly_chart(fig_rpe, use_container_width=True)
         else:
             st.info("Données manquantes (RPE).")
+            
 
-        
+
+
+
+
+
+
+
+
     # === CHARGE DU JOUR : z-score vs moyenne par position (fallback global) ===
     st.markdown("### 🎯 Charge du jour")
     
+    
     charge_metrics = ["Distance", "Distance 15km/h", "Distance 20-25km/h", "Distance 25km/h"]
     
-    # 1. Refiltrer la séance choisie (sel_date + sel_ampm)
+    # -------------------------------------------------------------------------
+    # 1) Refiltrer la séance choisie (sel_date + sel_ampm) -> session_df
+    # -------------------------------------------------------------------------
     train_data = data[data["Type"].isin(allowed_tasks)].copy()
     date_df = train_data[train_data["Date"].dt.date == sel_date].copy()
     
-    if "AMPM" in date_df.columns and 'sel_ampm' in locals() and sel_ampm != "Total":
+    if "AMPM" in date_df.columns and "sel_ampm" in locals() and sel_ampm != "Total":
         session_df = date_df[date_df["AMPM"] == sel_ampm].copy()
     else:
-        # Agrégation "Total" par joueur
+        # Agrégation "Total" par joueur (somme charge, mean RPE/Vmax)
         num_cols = [c for c in date_df.columns if c in [
             "Duration", "Distance", "Distance 15km/h", "Distance 15-20km/h",
             "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Distance 90% Vmax"
         ]]
+    
+        def _clean_num(s: pd.Series) -> pd.Series:
+            return pd.to_numeric(
+                s.astype(str)
+                 .str.replace(r"[^\d\-,\.]", "", regex=True)
+                 .str.replace(",", ".", regex=False)
+                 .str.replace("\u202f", "", regex=False),
+                errors="coerce"
+            )
+    
         for c in num_cols + ["RPE", "Vmax"]:
             if c in date_df.columns:
-                date_df[c] = pd.to_numeric(
-                    date_df[c].astype(str)
-                               .str.replace(r"[^\d\-,\.]", "", regex=True)
-                               .str.replace(",", ".", regex=False)
-                               .str.replace("\u202f", "", regex=False),
-                    errors="coerce"
-                )
+                date_df[c] = _clean_num(date_df[c])
+    
         agg_dict = {c: "sum" for c in num_cols}
         for c in ["RPE", "Vmax"]:
             if c in date_df.columns:
                 agg_dict[c] = "mean"
+    
         session_df = date_df.groupby("Name", as_index=False).agg(agg_dict)
     
-    # 2. Construire charge_df et assigner position
-    def clean_numeric_series(s):
+    # -------------------------------------------------------------------------
+    # 2) Nettoyage + charge_df + position (optionnel)
+    # -------------------------------------------------------------------------
+    def clean_numeric_series(s: pd.Series) -> pd.Series:
         return pd.to_numeric(
             s.astype(str)
              .str.replace(r"[^\d\-,\.]", "", regex=True)
@@ -1338,131 +1478,205 @@ elif page == "Entrainement":
             errors="coerce"
         )
     
-    charge_df = session_df[["Name"] + [c for c in charge_metrics if c in session_df.columns]].copy()
-    for m in charge_metrics:
-        if m in charge_df.columns:
-            charge_df[m] = clean_numeric_series(charge_df[m])
-    charge_df["Pos"] = charge_df["Name"].str.upper().map(player_positions).fillna("NC")
+    keep_metrics = [m for m in charge_metrics if m in session_df.columns]
+    charge_df = session_df[["Name"] + keep_metrics].copy()
     
-    # 3. Stats par position sur la séance (mean/std) avec contrôle (>=2 joueurs)
-    pos_stats = {}
-    for pos, grp in charge_df.groupby("Pos"):
-        pos_stats[pos] = {}
-        for metric in charge_metrics:
-            vals = grp[metric].dropna().astype(float)
-            if len(vals) >= 2:
-                pos_stats[pos][f"{metric}_mean"] = vals.mean()
-                pos_stats[pos][f"{metric}_std"]  = vals.std(ddof=1)
-            else:
-                pos_stats[pos][f"{metric}_mean"] = np.nan
-                pos_stats[pos][f"{metric}_std"]  = np.nan
+    for m in keep_metrics:
+        charge_df[m] = clean_numeric_series(charge_df[m])
     
-    # 4. Fallback global (toute séance) si position insuffisante
-    global_stats = {}
-    for metric in charge_metrics:
-        all_vals = charge_df[metric].dropna().astype(float)
-        if len(all_vals) >= 2:
-            global_stats[f"{metric}_mean"] = all_vals.mean()
-            global_stats[f"{metric}_std"]  = all_vals.std(ddof=1)
-        else:
-            global_stats[f"{metric}_mean"] = np.nan
-            global_stats[f"{metric}_std"]  = np.nan
+    # Position (si mapping dispo)
+    if "player_positions" in locals() and isinstance(player_positions, dict):
+        charge_df["Pos"] = charge_df["Name"].astype(str).str.upper().map(player_positions).fillna("NC")
+    else:
+        charge_df["Pos"] = "NC"
     
-    # 5. Calcul des z-scores : positionnels avec fallback
-    display = charge_df[["Name", "Pos"]].copy()
+    # -------------------------------------------------------------------------
+    # 3) Baselines : (A) équipe sur la séance, (B) joueur sur historique du même Type
+    #     -> z_team et z_self
+    # -------------------------------------------------------------------------
+    # --- historique "Type" (baseline individuelle)
+    hist_df = train_data.copy()
     
-    def compute_z(row, metric):
-        pos = row["Pos"]
-        val = row.get(metric)
-        if pd.isna(val):
-            return np.nan
-        mean = pos_stats.get(pos, {}).get(f"{metric}_mean", np.nan)
-        std  = pos_stats.get(pos, {}).get(f"{metric}_std", np.nan)
-        source = "position"
-        if pd.isna(mean) or pd.isna(std) or std == 0:
-            mean = global_stats.get(f"{metric}_mean", np.nan)
-            std  = global_stats.get(f"{metric}_std", np.nan)
-            source = "global"
-        if pd.isna(mean) or pd.isna(std) or std == 0:
-            return np.nan
-        z = (val - mean) / std
-        return round(z, 2)
+    # Si AMPM existe et que tu veux une baseline cohérente avec AM/PM, tu peux filtrer
+    # (optionnel, je laisse simple : baseline sur Type uniquement)
+    # if "AMPM" in hist_df.columns and "sel_ampm" in locals() and sel_ampm != "Total":
+    #     hist_df = hist_df[hist_df["AMPM"] == sel_ampm].copy()
     
-    for metric in charge_metrics:
-        display[metric] = charge_df.apply(lambda r: compute_z(r, metric), axis=1)
+    # Normalisation numérique sur l'historique (seulement métriques utiles)
+    for m in keep_metrics:
+        if m in hist_df.columns:
+            hist_df[m] = clean_numeric_series(hist_df[m])
     
-    # 6. Affichage coloré
-    cmap_z = matplotlib.cm.get_cmap("RdYlGn_r")
-    norm = matplotlib.colors.Normalize(vmin=-2, vmax=2, clip=True)
-    
-    def color_by_z(val):
-        if pd.isna(val):
-            return ""
-        return f"background-color:{mcolors.rgb2hex(cmap_z(norm(val)))};"
-    
-    styled = (
-        display.style
-               .format({m: "{:.2f}" for m in charge_metrics})
-               .set_table_styles([
-                   {"selector": "th", "props": [("background-color", "#0031E3"), ("color", "white"), ("text-align", "center")]},
-                   {"selector": "td", "props": [("text-align", "center")]}
-               ])
+    # stats joueur (baseline Type)
+    player_stats = (
+        hist_df.groupby("Name")[keep_metrics]
+               .agg(["mean", "std"])
     )
-    for metric in charge_metrics:
-        styled = styled.applymap(color_by_z, subset=[metric])
     
+    # aplatissement colonnes MultiIndex -> "Distance_p_mean", "Distance_p_std"
+    player_stats.columns = [f"{metric}_p_{stat}" for metric, stat in player_stats.columns]
+    player_stats = player_stats.reset_index()
     
-        # calcul dynamique
-    n_rows = display.shape[0] + 1  # y compris header
-    n_cols = display.shape[1]
-    height = min(1000, 40 * n_rows)    # limite à 1000px max
-    width  = min(1600, 200 * n_cols)   # ~200px par colonne, cap à 1600px
+    # merge baseline joueur sur la séance
+    diag_df = charge_df.merge(player_stats, on="Name", how="left")
     
-    # --- 6. Listes par métrique (au lieu du tableau coloré) ----------------------
-    LOW_THR  = -1.20   # z-score < 1.20
-    HIGH_THR = 1.50   # z-score > 1.50
+    # calcul z-scores
+    EPS = 1e-9
     
-    def bullet_names(df, metric, op):
-        if metric not in df.columns:
-            return None
-        m = df[metric].dropna()
-        if m.empty:
-            return None
-        
-        if op == "low":
-            mask = (df[metric] < LOW_THR)
-            sub = df.loc[mask & df[metric].notna(), ["Name", metric]]
-            sub = sub.sort_values(metric, ascending=True)
+    for m in keep_metrics:
+        # --- vs équipe (sur séance)
+        t_mean = diag_df[m].mean(skipna=True)
+        t_std  = diag_df[m].std(skipna=True, ddof=1)
+    
+        if pd.notna(t_std) and t_std > 0:
+            diag_df[f"{m}_z_team"] = (diag_df[m] - t_mean) / (t_std + EPS)
         else:
-            mask = (df[metric] > HIGH_THR)
-            sub = df.loc[mask & df[metric].notna(), ["Name", metric]]
-            sub = sub.sort_values(metric, ascending=False)
-        
+            diag_df[f"{m}_z_team"] = np.nan
+    
+        # --- vs joueur (baseline Type)
+        p_mean = diag_df.get(f"{m}_p_mean")
+        p_std  = diag_df.get(f"{m}_p_std")
+    
+        if p_mean is not None and p_std is not None:
+            diag_df[f"{m}_z_self"] = (diag_df[m] - p_mean) / (p_std.replace(0, np.nan) + EPS)
+        else:
+            diag_df[f"{m}_z_self"] = np.nan
+    
+    # -------------------------------------------------------------------------
+    # 4) VIZ 1 : Scatter diagnostic (vs joueur en X, vs équipe en Y) par métrique
+    # -------------------------------------------------------------------------
+    def load_map_scatter(diag: pd.DataFrame, metric: str, title: str):
+        xcol = f"{metric}_z_self"
+        ycol = f"{metric}_z_team"
+        if xcol not in diag.columns or ycol not in diag.columns:
+            return None
+    
+        d = diag[["Name", "Pos", xcol, ycol]].dropna(subset=[xcol, ycol]).copy()
+        if d.empty:
+            return None
+    
+        fig = px.scatter(
+            d,
+            x=xcol,
+            y=ycol,
+            text="Name",
+            hover_data={"Pos": True, xcol: True, ycol: True},
+        )
+    
+        # axes lines
+        fig.add_vline(x=0, line_dash="dash", line_width=1)
+        fig.add_hline(y=0, line_dash="dash", line_width=1)
+    
+        # decision zones (overload / underload)
+        # overload zone: x>+1 & y>+1
+        fig.add_shape(type="rect", x0=1, x1=3, y0=1, y1=3,
+                      fillcolor="red", opacity=0.12, line_width=0)
+        # underload zone: x<-1 & y<-1
+        fig.add_shape(type="rect", x0=-3, x1=-1, y0=-3, y1=-1,
+                      fillcolor="blue", opacity=0.12, line_width=0)
+    
+        fig.update_traces(textposition="top center")
+        fig.update_layout(
+            title=title,
+            xaxis_title="Déviation vs joueur (z)",
+            yaxis_title="Déviation vs équipe (z)",
+            margin=dict(l=20, r=20, t=55, b=30),
+            showlegend=False,
+        )
+        fig.update_xaxes(range=[-3, 3], zeroline=False)
+        fig.update_yaxes(range=[-3, 3], zeroline=False)
+    
+        return fig
+    
+    # -------------------------------------------------------------------------
+    # 5) VIZ 2 : Insights bullet lists (underload / overload) par métrique
+    # -------------------------------------------------------------------------
+    LOW_Z  = -1.0
+    HIGH_Z =  1.0
+    
+    def bullet_names_2d(diag: pd.DataFrame, metric: str, mode: str) -> str | None:
+        xcol = f"{metric}_z_self"
+        ycol = f"{metric}_z_team"
+        if xcol not in diag.columns or ycol not in diag.columns:
+            return None
+    
+        d = diag[["Name", xcol, ycol]].dropna(subset=[xcol, ycol]).copy()
+        if d.empty:
+            return None
+    
+        if mode == "low":
+            sub = d[(d[xcol] <= LOW_Z) & (d[ycol] <= LOW_Z)].copy()
+            sub["score"] = sub[xcol] + sub[ycol]
+            sub = sub.sort_values("score", ascending=True)
+        else:
+            sub = d[(d[xcol] >= HIGH_Z) & (d[ycol] >= HIGH_Z)].copy()
+            sub["score"] = sub[xcol] + sub[ycol]
+            sub = sub.sort_values("score", ascending=False)
+    
         if sub.empty:
             return None
-        
-        lines = [f"• {row['Name']} ({row[metric]:.2f})" for _, row in sub.iterrows()]
+    
+        lines = [f"• {row['Name']} (self {row[xcol]:+.2f}, team {row[ycol]:+.2f})"
+                 for _, row in sub.iterrows()]
         return "\n".join(lines)
     
+    # -------------------------------------------------------------------------
+    # 6) Layout : scatter 2x2 + insights 2 colonnes
+    # -------------------------------------------------------------------------
+    colA, colB = st.columns(2)
     
+    with colA:
+    
+        if "Distance" in keep_metrics:
+            fig = load_map_scatter(diag_df, "Distance", "Load Map — Distance")
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Données manquantes (Distance).")
+    
+        if "Distance 15km/h" in keep_metrics:
+            fig = load_map_scatter(diag_df, "Distance 15km/h", "Load Map — Distance 15km/h")
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Données manquantes (Distance 15km/h)")
+    
+    
+    with colB:
+    
+        if "Distance 20-25km/h" in keep_metrics:
+            fig = load_map_scatter(diag_df, "Distance 20-25km/h", "Load Map — Distance 20-25km/h")
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Données manquantes (Distance 20-25km/h)")
+    
+        if "Distance 25km/h" in keep_metrics:
+            fig = load_map_scatter(diag_df, "Distance 25km/h", "Load Map — Distance 25km/h")
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Données manquantes (Distance 25km/h)")
+    
+    st.divider()
+    
+    # Insights bullets (non-vides uniquement)
     col_low, col_high = st.columns(2)
     with col_low:
-        st.markdown("#### Performances basses — complément nécessaire")
-        for metric in charge_metrics:
-            res = bullet_names(display, metric, "low")
-            if res:  # n'affiche que si non vide
-                st.markdown(f"**{metric}**")
+        st.markdown("#### Sous-charge — complément nécessaire")
+        for m in keep_metrics:
+            res = bullet_names_2d(diag_df, m, "low")
+            if res:
+                st.markdown(f"**{m}**")
                 st.markdown(res)
     
     with col_high:
-        st.markdown("#### Performances élevées — vigilance")
-        for metric in charge_metrics:
-            res = bullet_names(display, metric, "high")
+        st.markdown("#### Sur-charge — vigilance")
+        for m in keep_metrics:
+            res = bullet_names_2d(diag_df, m, "high")
             if res:
-                st.markdown(f"**{metric}**")
+                st.markdown(f"**{m}**")
                 st.markdown(res)
-
-       
     
     # html = f"""
     # <html>
@@ -1923,7 +2137,7 @@ elif page == "Match":
 
     def highlight_last_row(row, last_index):
         return [
-            f"background-color:{versailles_blue}; color:white" if row.name == last_index else ""
+            f"background-color:{versailles_blue}; color:black" if row.name == last_index else ""
             for _ in row
         ]
 
@@ -1974,7 +2188,7 @@ elif page == "Match":
         styled,
         use_container_width=True,
         hide_index=True,
-        height=min(table_height, 1000)  # cap at 1000px to avoid huge page
+        height=min(table_height, 500)  # cap at 1000px to avoid huge page
 )
 
 
@@ -3314,6 +3528,316 @@ elif page == "Training Load":
     </html>
     """
     st.markdown(wrapper, unsafe_allow_html=True)
+    
+
+    # ============================================================
+    # TRAINING LOAD — WEEKLY CUMULATIVE (RATIO vs Référence Match)
+    # Uses the Refmatch DF built in "Best performance" page
+    # ============================================================
+
+    st.markdown("#### 📊 Weekly ratio")
+    
+    
+    BAR_COLOR = "#0031E3"
+    WEEK_METRICS = ["Distance", "Distance 15km/h", "Distance 25km/h", "Acc", "Dec"]
+    
+    # --------- helpers ---------
+    def clean_numeric_series(s: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace("\u202f", "", regex=False),
+            errors="coerce"
+        )
+    
+    @st.cache_data(show_spinner=False)
+    def build_reference_match(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Rebuild Référence Match (same logic as Best performance page),
+        so Training Load can safely use it.
+        Returns one row per player, with a 'best match' reference per metric.
+        """
+        ref_fields = [
+            "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
+            "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
+            "N° Sprints", "Acc", "Dec", "Vmax", "Distance 90% Vmax"
+        ]
+    
+        match_df = data[data["Type"] == "GAME"].copy()
+    
+        # clean numeric
+        for c in ref_fields:
+            if c in match_df.columns:
+                match_df[c] = clean_numeric_series(match_df[c])
+            else:
+                match_df[c] = np.nan
+    
+        records = []
+        for name, grp in match_df.groupby("Name"):
+            rec = {"Name": name}
+    
+            # full games (>=90): best = max
+            full = grp[grp["Duration"] >= 90]
+            if not full.empty:
+                for c in ref_fields:
+                    rec[c] = full[c].max(skipna=True)
+    
+            # partial only: take longest and scale all volume vars to 90'
+            else:
+                if grp["Duration"].dropna().empty:
+                    for c in ref_fields:
+                        rec[c] = np.nan
+                else:
+                    longest = grp.loc[grp["Duration"].idxmax()].copy()
+                    orig = float(longest["Duration"]) if pd.notna(longest["Duration"]) else np.nan
+                    rec["Duration"] = orig
+    
+                    for c in ref_fields:
+                        val = longest.get(c, np.nan)
+    
+                        # do not scale these
+                        if c in {"Duration", "Vmax", "M/min", "M/min 15km/h"} or pd.isna(val) or pd.isna(orig) or orig <= 0:
+                            rec[c] = val
+                        else:
+                            rec[c] = 90.0 * float(val) / orig
+    
+            records.append(rec)
+    
+        ref_df = pd.DataFrame.from_records(records)
+    
+        # keep numeric (do NOT cast to Int64 here, to avoid merge/calc issues)
+        return ref_df
+    
+    
+    def make_weekly_bar_ratio_from_reference(
+        player_week_sum: pd.DataFrame,
+        ref_df: pd.DataFrame,
+        metric: str,
+        title: str,
+        unit: str = "",
+        bar_color: str = BAR_COLOR,
+    ):
+        """
+        One bar per player:
+        - y = weekly cumulative value (sum of sessions in selected week(s))
+        - text on bar = ratio (weekly / best_match), displayed as number (e.g., 1.50)
+        - hover shows weekly, best match, ratio
+        """
+        if metric not in player_week_sum.columns or metric not in ref_df.columns:
+            return None
+    
+        d = player_week_sum[["Name", metric]].copy()
+        d[metric] = clean_numeric_series(d[metric])
+        d = d.dropna(subset=[metric])
+    
+        if d.empty:
+            return None
+    
+        ref = ref_df[["Name", metric]].copy()
+        ref[metric] = clean_numeric_series(ref[metric])
+    
+        d = d.merge(ref, on="Name", how="left", suffixes=("", "_best"))
+        d.rename(columns={metric: "week_value", f"{metric}_best": "best_match"}, inplace=True)
+    
+        d["ratio"] = np.where(d["best_match"] > 0, d["week_value"] / d["best_match"], np.nan)
+        d["ratio_txt"] = d["ratio"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "")
+    
+        d = d.sort_values("week_value", ascending=False)
+    
+        fig = px.bar(
+            d,
+            x="Name",
+            y="week_value",
+            title=title,
+            text="ratio_txt",
+            color_discrete_sequence=[bar_color],
+        )
+    
+        # text styling (smaller, black), no rectangle
+        fig.update_traces(
+            textposition="outside",
+            textfont=dict(size=10, color="black"),
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                f"{metric} semaine: %{{y:.0f}} {unit}<br>"
+                "Best match: %{customdata[0]:.0f} " + unit + "<br>"
+                "Ratio: %{customdata[1]:.2f}"
+                "<extra></extra>"
+            ),
+            customdata=np.stack(
+                [
+                    pd.to_numeric(d["best_match"], errors="coerce").fillna(np.nan).values,
+                    pd.to_numeric(d["ratio"], errors="coerce").fillna(np.nan).values,
+                ],
+                axis=1,
+            ),
+        )
+    
+        fig.update_layout(
+            xaxis_title="Joueur",
+            yaxis_title=(unit if unit else metric),
+            margin=dict(l=20, r=20, t=55, b=90),
+            showlegend=False,
+        )
+        fig.update_xaxes(tickangle=-60)
+    
+        return fig
+    
+    
+    def make_weekly_acc_dec_from_reference(
+        player_week_sum: pd.DataFrame,
+        ref_df: pd.DataFrame,
+        title: str,
+    ):
+        """
+        Acc/Dec in the same graph (grouped bars), with ratio text (Value / best_match).
+        """
+        needed = {"Acc", "Dec"}
+        if not needed.issubset(player_week_sum.columns) or not needed.issubset(ref_df.columns):
+            return None
+    
+        d = player_week_sum[["Name", "Acc", "Dec"]].copy()
+        d["Acc"] = clean_numeric_series(d["Acc"])
+        d["Dec"] = clean_numeric_series(d["Dec"])
+    
+        if d.dropna(subset=["Acc", "Dec"], how="all").empty:
+            return None
+    
+        ref = ref_df[["Name", "Acc", "Dec"]].copy()
+        ref["Acc"] = clean_numeric_series(ref["Acc"])
+        ref["Dec"] = clean_numeric_series(ref["Dec"])
+    
+        d = d.merge(ref, on="Name", how="left", suffixes=("", "_best"))
+        d["ratio_acc"] = np.where(d["Acc_best"] > 0, d["Acc"] / d["Acc_best"], np.nan)
+        d["ratio_dec"] = np.where(d["Dec_best"] > 0, d["Dec"] / d["Dec_best"], np.nan)
+    
+        long = d.melt(
+            id_vars=["Name"],
+            value_vars=["Acc", "Dec"],
+            var_name="Metric",
+            value_name="Value",
+        )
+    
+        ratio_map = d.set_index("Name")[["ratio_acc", "ratio_dec"]].to_dict(orient="index")
+        long["ratio"] = long.apply(
+            lambda r: ratio_map.get(r["Name"], {}).get("ratio_acc" if r["Metric"] == "Acc" else "ratio_dec", np.nan),
+            axis=1
+        )
+        long["ratio_txt"] = long["ratio"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "")
+    
+        fig = px.bar(
+            long,
+            x="Name",
+            y="Value",
+            color="Metric",
+            barmode="group",
+            title=title,
+            text="ratio_txt",
+            color_discrete_sequence=["#0031E3", "#CFB013"],
+        )
+    
+        fig.update_traces(
+            textposition="outside",
+            textfont=dict(size=10, color="black"),
+            cliponaxis=False,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "%{legendgroup}: %{y:.0f}<br>"
+                "Ratio: %{text}"
+                "<extra></extra>"
+            ),
+        )
+    
+        fig.update_layout(
+            xaxis_title="Joueur",
+            yaxis_title="Nb",
+            margin=dict(l=20, r=20, t=55, b=90),
+            legend_title_text="",
+        )
+        fig.update_xaxes(tickangle=-60)
+    
+        return fig
+    
+    
+    # --------- weekly cumulative build (selected weeks) ---------
+    # train_data_week, selected_weeks are assumed to exist from your Training Load page
+    week_df = train_data_week[train_data_week["Semaine"].isin(selected_weeks)].copy()
+    if week_df.empty:
+        st.info("Aucune donnée d'entraînement pour les semaines sélectionnées.")
+        st.stop()
+    
+    cols_needed = ["Name"] + [c for c in WEEK_METRICS if c in week_df.columns]
+    df_week = week_df[cols_needed].copy()
+    
+    for c in WEEK_METRICS:
+        if c in df_week.columns:
+            df_week[c] = clean_numeric_series(df_week[c])
+    
+    # cumulative per player across all selected weeks
+    player_week_sum = (
+        df_week.groupby("Name", as_index=False)
+               .agg({c: "sum" for c in WEEK_METRICS if c in df_week.columns})
+    )
+    
+    # --------- reference match (built once, cached) ---------
+    ref_df = build_reference_match(data)
+    
+    # --------- figures ---------
+    fig_distance = make_weekly_bar_ratio_from_reference(
+        player_week_sum, ref_df,
+        metric="Distance",
+        title="Distance — cumul semaine (ratio vs Référence Match)",
+        unit="m",
+    )
+    
+    fig_d15 = make_weekly_bar_ratio_from_reference(
+        player_week_sum, ref_df,
+        metric="Distance 15km/h",
+        title="Distance 15km/h — cumul semaine (ratio vs Référence Match)",
+        unit="m",
+    )
+    
+    fig_d25 = make_weekly_bar_ratio_from_reference(
+        player_week_sum, ref_df,
+        metric="Distance 25km/h",
+        title="Distance 25km/h — cumul semaine (ratio vs Référence Match)",
+        unit="m",
+    )
+    
+    fig_accdec = make_weekly_acc_dec_from_reference(
+        player_week_sum, ref_df,
+        title="Acc/Dec — cumul semaine (ratio vs Référence Match)",
+    )
+    
+    # --------- display (avoid one-liner that prints DeltaGenerator) ---------
+    colA, colB = st.columns(2)
+    
+    with colA:
+        if fig_distance is not None:
+            st.plotly_chart(fig_distance, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance).")
+    
+        if fig_d15 is not None:
+            st.plotly_chart(fig_d15, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance 15km/h).")
+    
+    with colB:
+        if fig_d25 is not None:
+            st.plotly_chart(fig_d25, use_container_width=True)
+        else:
+            st.info("Données manquantes (Distance 25km/h).")
+    
+        if fig_accdec is not None:
+            st.plotly_chart(fig_accdec, use_container_width=True)
+        else:
+            st.info("Données manquantes (Acc/Dec).")      
+            
+        
+        
 
 
 
