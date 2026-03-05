@@ -3897,146 +3897,132 @@ elif page == "Training Load":
     st.plotly_chart(fig, use_container_width=True)
 
 
-    st.markdown("#### 📈 Analyse Semaine")
+    st.markdown("#### 📈 Analyse Entrainement")
     
-    # --- Filtres principaux partagés ---
+    import numpy as np
+    import pandas as pd
+    import plotly.express as px
+    
+    # --- base dataset ---
+    train_data = data.copy()
+    
+    # ensure Date is datetime
+    train_data["Date"] = pd.to_datetime(train_data["Date"], errors="coerce")
+    
+    # ensure Semaine exists
+    if "Semaine" not in train_data.columns:
+        train_data["Semaine"] = train_data["Date"].dt.strftime("%Y-%W")
+    
+    # --------------------
+    # Filters
+    # --------------------
     col1, col2 = st.columns(2)
+    
+    all_weeks = sorted(train_data["Semaine"].dropna().unique())
+    default_last10 = all_weeks[-10:] if len(all_weeks) >= 10 else all_weeks
+    
     with col1:
-        semaines = sorted(train_data["Semaine"].dropna().unique())
-        sel_sem = st.multiselect("Semaine(s)", semaines)
+        sel_sem = st.multiselect(
+            "Semaine(s)",
+            options=all_weeks,
+            default=default_last10,
+            key="analyse_train_semaines",
+        )
+    
+    types = sorted(train_data["Type"].dropna().unique())
+    
     with col2:
-        types = sorted(train_data["Type"].dropna().unique())
-        sel_task = st.multiselect("Tâche(s)", types)
+        sel_task = st.multiselect(
+            "Tâche(s)",
+            options=types,
+            default=[],
+            key="analyse_train_types",
+        )
     
-    # --- Boucle pour 3 graphiques à la suite ---
-    for i in range(1, 4):
-        st.markdown(f"###### Graphique {i}")
-        colx, coly = st.columns(2)
-        with coly:
-            agg_options = {"Jour": "day", "Semaine": "week", "Mois": "month"}
-            x_axis_mode = st.selectbox(
-                f"Regrouper par :", list(agg_options.keys()), key=f"xaxis_{i}"
-            )
-            agg_mode = agg_options[x_axis_mode]
-        with colx:
-            YVARS = [
-                "Duration", "Distance", "M/min", "Distance 15km/h", "M/min 15km/h",
-                "Distance 15-20km/h", "Distance 20-25km/h", "Distance 25km/h",
-                "Distance 90% Vmax", "N° Sprints", "Vmax", "%Vmax",
-                "Acc", "Dec", "Amax", "Dmax", "HSR", "HSR/min",
-                "SPR", "SPR/min", "HSPR", "HSPR/min", "Dist Acc", "Dist Dec"
-            ]
-            sel_y = st.multiselect(
-                f"Variable(s) à afficher (max 2) – Graphique {i}",
-                options=[v for v in YVARS if v in train_data.columns],
-                default=["Distance"],
-                max_selections=2,
-                key=f"yvar_{i}"
-            )
+    # --------------------
+    # Variables
+    # --------------------
+    YVARS = [
+        "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
+        "Distance 15-20km/h","Distance 20-25km/h","Distance 25km/h",
+        "Distance 90% Vmax","N° Sprints","Vmax","Acc","Dec"
+    ]
     
-        # --- Filtrage ---
-        filt = train_data.copy()
-        if sel_sem:
-            filt = filt[filt["Semaine"].isin(sel_sem)]
-        if sel_task:
-            filt = filt[filt["Type"].isin(sel_task)]
-        if "Date" in filt.columns:
-            filt["Date"] = pd.to_datetime(filt["Date"], errors="coerce")
+    y_options = [v for v in YVARS if v in train_data.columns]
     
-        for col in sel_y:
-            if col in filt.columns:
-                filt[col] = (
-                    filt[col]
-                    .replace(["None", "nan", "NaN", ""], np.nan)
-                    .astype(str)
-                    .str.replace(r"[ \u202f\u00A0]", "", regex=True)
-                    .str.replace(",", ".", regex=False)
-                    .replace("", np.nan)
-                )
-                filt[col] = pd.to_numeric(filt[col], errors="coerce")
+    DEFAULT_VARS = ["Distance","Distance 15km/h"]
+    default_vars = [v for v in DEFAULT_VARS if v in y_options]
     
-        # --- Regroupement ---
-        grp = None
-        if sel_y:
-            # build grouping column
-            if agg_mode == "day" and "Date" in filt.columns:
-                filt["XGroup"] = filt["Date"].dt.date
-                label_func = lambda d: d.strftime("%d.%m") if not pd.isnull(d) else ""
-            elif agg_mode == "week":
-                filt["XGroup"] = (
-                    filt["Semaine"]
-                    if "Semaine" in filt.columns
-                    else filt["Date"].dt.strftime("%G-W%V")
-                )
-                label_func = lambda d: f"S{int(d)}" if pd.notnull(d) and str(d).isdigit() else str(d)
-            elif agg_mode == "month" and "Date" in filt.columns:
-                filt["XGroup"] = filt["Date"].dt.strftime("%Y-%m")
-                label_func = lambda d: str(d)
-            else:
-                filt["XGroup"] = filt["Date"].dt.date if "Date" in filt.columns else None
-                label_func = lambda d: str(d)
+    sel_y = st.multiselect(
+        "Variable(s) à afficher (max 2)",
+        options=y_options,
+        default=default_vars,
+        max_selections=2,
+        key="analyse_train_y",
+    )
     
-            if "XGroup" in filt.columns:
-                if agg_mode == "day":
-                    # simple mean by day
-                    grp = (
-                        filt.groupby("XGroup")[sel_y]
-                        .mean(numeric_only=True)
-                        .sort_index()
-                    )
-                else:
-                    # 1️⃣ sum sessions inside each player/period
-                    inner = {}
-                    for v in sel_y:
-                        inner[v] = "max" if v == "Vmax" else "sum"
-                    by_player = filt.groupby(["XGroup", "Name"], as_index=False).agg(inner)
+    # --------------------
+    # Filtering
+    # --------------------
+    filt = train_data.copy()
     
-                    # 2️⃣ average across players (or max for Vmax)
-                    outer = {}
-                    for v in sel_y:
-                        outer[v] = "max" if v == "Vmax" else "mean"
-                    grp = (
-                        by_player.groupby("XGroup", as_index=True)
-                        .agg(outer)
-                        .sort_index()
-                    )
+    if sel_sem:
+        filt = filt[filt["Semaine"].isin(sel_sem)]
     
-        # --- Plot ---
-        if grp is not None and not grp.empty:
-            grp_plot = grp.reset_index()
-            grp_plot = grp_plot.rename(columns={grp_plot.columns[0]: "XGroup"})
-            grp_plot["X_fmt"] = grp_plot["XGroup"].apply(label_func)
-            y_arg = sel_y if len(sel_y) > 1 else sel_y[0]
-            color_sequence = ["#0031E3", "#CFB013"] if len(sel_y) > 1 else ["#0031E3"]
+    if sel_task:
+        filt = filt[filt["Type"].isin(sel_task)]
     
-            fig = px.bar(
-                grp_plot,
-                x="XGroup",
-                y=y_arg,
-                barmode="group",
-                labels={"value": "Valeur collective"},
-                title=f"Collectif – {' & '.join(sel_y)} par {x_axis_mode.lower()}",
-                text_auto=".0f",
-                color_discrete_sequence=color_sequence,
-            )
-            fig.update_traces(
-                textposition="outside",
-                textfont_size=10,
-                textangle=0,
-                cliponaxis=False,
-            )
-            fig.update_layout(
-                xaxis_tickangle=0,
-                height=600,
-                xaxis_title=x_axis_mode,
-                yaxis_title="Valeur collective",
-                xaxis=dict(
-                    tickmode="array",
-                    tickvals=grp_plot["XGroup"],
-                    ticktext=grp_plot["X_fmt"],
-                ),
-                margin=dict(t=40, b=30, l=40, r=30),
-            )
-            st.plotly_chart(fig, use_container_width=True, key=f"plot_{i}")
-        else:
-            st.info("Aucune donnée pour ce graphique selon ces filtres ou variable non sélectionnée.")
+    if filt.empty or not sel_y:
+        st.info("Aucune donnée disponible.")
+        st.stop()
+    
+    # numeric cleaning
+    for col in sel_y:
+        filt[col] = (
+            filt[col]
+            .replace(["None","nan","NaN",""], np.nan)
+            .astype(str)
+            .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+            .str.replace(",", ".", regex=False)
+        )
+        filt[col] = pd.to_numeric(filt[col], errors="coerce")
+    
+    # --------------------
+    # Aggregation (weekly)
+    # --------------------
+    inner = {v: ("max" if v=="Vmax" else "sum") for v in sel_y}
+    by_player = filt.groupby(["Semaine","Name"], as_index=False).agg(inner)
+    
+    outer = {v: ("max" if v=="Vmax" else "mean") for v in sel_y}
+    grp = by_player.groupby("Semaine", as_index=False).agg(outer).sort_values("Semaine")
+    
+    # --------------------
+    # Plot
+    # --------------------
+    y_arg = sel_y if len(sel_y) > 1 else sel_y[0]
+    colors = ["#0031E3","#CFB013"] if len(sel_y) > 1 else ["#0031E3"]
+    
+    fig = px.bar(
+        grp,
+        x="Semaine",
+        y=y_arg,
+        barmode="group",
+        title=f"Collectif — {' & '.join(sel_y)} par semaine",
+        text_auto=".0f",
+        color_discrete_sequence=colors,
+    )
+    
+    fig.update_traces(
+        textposition="outside",
+        textfont=dict(size=10,color="black"),
+        cliponaxis=False
+    )
+    
+    fig.update_layout(
+        height=520,
+        xaxis_title="Semaine",
+        yaxis_title="Valeur collective",
+        margin=dict(t=40,b=40,l=40,r=30),
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
