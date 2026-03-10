@@ -1886,7 +1886,8 @@ def plot_kpi_zscore_benchmark(
         ("OBV", "team_match_obv"),
         ("Dribbles réussi", "team_match_completed_dribbles"),        
         
-        ("xG concédés", "team_match_np_xg_conceded"),      
+        ("xG concédés", "team_match_np_xg_conceded"),
+        ("Corner xG Def.", "team_match_corner_xg_conceded"),
         ("PPDA", "team_match_ppda"),    
         ("Pression Porteur", "team_match_aggression"),      
         ("Pressing moitié Adv", "team_match_fhalf_pressures"),
