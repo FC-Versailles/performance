@@ -181,7 +181,7 @@ num_days = df["col14"].notna().sum()
 last_points = df["col14"].dropna().iloc[-1] if num_days > 0 else 0
 
 # 3. Calculations
-pct_objective = (last_points / 34) * 100
+pct_objective = (last_points / 44) * 100
 pct_played = (num_days / 32) * 100
 
 # --- Déterminer l'emoji ---
