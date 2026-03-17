@@ -2908,13 +2908,113 @@ elif page == "Match":
 
 elif page == "Joueurs":
     st.subheader("🔎 Analyse d'un joueur")
-
+    
     # --- Sélection du joueur ---
     players = sorted(data["Name"].dropna().unique())
     sel = st.selectbox("Choisissez un joueur", players)
 
     p_df = data[data["Name"] == sel].copy()
     p_df["Date"] = pd.to_datetime(p_df["Date"], errors="coerce")
+    
+    
+    st.markdown("### 📊 Performance match par match")
+
+    # --- Base GAME only for selected player ---
+    p_game = data[
+        (data["Name"] == sel) &
+        (data["Type"].astype(str).str.upper().str.strip() == "GAME")
+    ].copy()
+    
+    if p_game.empty:
+        st.info("Aucune donnée GAME pour ce joueur.")
+    else:
+        p_game["Date"] = pd.to_datetime(p_game["Date"], errors="coerce")
+    
+        game_metrics = ["M/min", "Distance 15km/h", "Distance 25km/h", "Vmax"]
+    
+        # --- clean numeric columns ---
+        for c in game_metrics:
+            if c in p_game.columns:
+                p_game[c] = (
+                    p_game[c].astype(str)
+                             .str.replace(r"[^\d,.\-]", "", regex=True)
+                             .str.replace(",", ".", regex=False)
+                )
+                p_game[c] = pd.to_numeric(p_game[c], errors="coerce")
+    
+        # --- aggregate by Jour (safe if duplicates exist) ---
+        agg_map = {
+            "Date": "min",
+            "M/min": "mean",
+            "Distance 15km/h": "sum",
+            "Distance 25km/h": "sum",
+            "Vmax": "max",
+        }
+    
+        agg_map = {k: v for k, v in agg_map.items() if k in p_game.columns}
+    
+        p_game_jour = (
+            p_game.groupby("Jour", as_index=False)
+                  .agg(agg_map)
+                  .sort_values("Date")
+        )
+    
+        # order of matches on x-axis
+        jour_order = p_game_jour["Jour"].tolist()
+    
+        def make_game_bar(df, y_col, title, color="#0031E3", text_fmt=".1f"):
+            fig = px.bar(
+                df,
+                x="Jour",
+                y=y_col,
+                title=title,
+                text_auto=text_fmt,
+                color_discrete_sequence=[color]
+            )
+            fig.update_traces(textposition="outside", cliponaxis=False)
+            fig.update_layout(
+                height=420,
+                margin=dict(t=50, b=40, l=40, r=20),
+                xaxis_title="Match (Jour)",
+                yaxis_title=y_col,
+                showlegend=False
+            )
+            fig.update_xaxes(
+                categoryorder="array",
+                categoryarray=jour_order,
+                tickangle=-45
+            )
+            return fig
+    
+        col1, col2 = st.columns(2)
+    
+        with col1:
+            if "M/min" in p_game_jour.columns:
+                st.plotly_chart(
+                    make_game_bar(p_game_jour, "M/min", f"{sel} – M/min par match", text_fmt=".1f"),
+                    use_container_width=True
+                )
+    
+            if "Distance 15km/h" in p_game_jour.columns:
+                st.plotly_chart(
+                    make_game_bar(p_game_jour, "Distance 15km/h", f"{sel} – Distance 15km/h par match", text_fmt=".0f"),
+                    use_container_width=True
+                )
+    
+        with col2:
+            if "Distance 25km/h" in p_game_jour.columns:
+                st.plotly_chart(
+                    make_game_bar(p_game_jour, "Distance 25km/h", f"{sel} – Distance 25km/h par match", text_fmt=".0f"),
+                    use_container_width=True
+                )
+    
+            if "Vmax" in p_game_jour.columns:
+                st.plotly_chart(
+                    make_game_bar(p_game_jour, "Vmax", f"{sel} – Vmax par match", text_fmt=".1f"),
+                    use_container_width=True
+                )
+
+
 
     # --- Colonnes numériques à nettoyer ---
     cols_to_clean = [
