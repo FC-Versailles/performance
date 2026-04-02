@@ -3666,15 +3666,20 @@ elif page == "Training Load":
     BAR_COLOR = "#0031E3"
     WEEK_METRICS = ["Distance", "Distance 15km/h", "Distance 25km/h", "Acc", "Dec"]
     
-    # --------- helpers ---------
+
+    
+    
     def clean_numeric_series(s: pd.Series) -> pd.Series:
+        """Cleans strings like '1 234', '1 234', '1,234', '1234m' -> numeric."""
         return pd.to_numeric(
             s.astype(str)
-             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces incl. narrow NBSP
              .str.replace(",", ".", regex=False)
-             .str.replace("\u202f", "", regex=False),
+             .str.replace(r"[^\d\.\-]", "", regex=True),       # keep digits . -
             errors="coerce"
         )
+    
     
     @st.cache_data(show_spinner=False)
     def build_reference_match(data: pd.DataFrame) -> pd.DataFrame:
@@ -3973,13 +3978,15 @@ elif page == "Training Load":
     # =========================
     st.markdown("#### 🏃 Charge UA")
     
-    # local numeric cleaner (if not defined globally)
+    
     def to_num(s: pd.Series) -> pd.Series:
+        """Cleans strings like '1 234', '1 234', '1,234', '1234m' -> numeric."""
         return pd.to_numeric(
             s.astype(str)
-             .str.replace(r"[^\d\-,\.]", "", regex=True)
+             .replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces incl. narrow NBSP
              .str.replace(",", ".", regex=False)
-             .replace("", pd.NA),
+             .str.replace(r"[^\d\.\-]", "", regex=True),       # keep digits . -
             errors="coerce"
         )
 
