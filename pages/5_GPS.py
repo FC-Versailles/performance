@@ -29,6 +29,7 @@ import plotly.graph_objects as go
 from scipy.stats import zscore
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+
 # ── Constants ───────────────────────────────────────"──────────────────────────
 
 st.set_page_config(layout='wide')
@@ -92,7 +93,6 @@ def load_data():
     creds = get_credentials()
     service = build('sheets', 'v4', credentials=creds)
 
-    # === Use the fast values().get() endpoint ===
     result = (
         service.spreadsheets()
                .values()
@@ -106,11 +106,9 @@ def load_data():
         st.error("❌ Aucune donnée trouvée dans la plage.")
         return pd.DataFrame()
 
-    # first row = header, rest = data
     header, data_rows = rows[0], rows[1:]
     df = pd.DataFrame(data_rows, columns=header)
 
-    # keep only your 24 columns
     expected = [
         "Season","Semaine","HUMEUR","PLAISIR","RPE","ERPE","Date","AMPM","Jour","Type","Ttotal","Teffectif","Name",
         "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
@@ -118,36 +116,55 @@ def load_data():
         "Distance 90% Vmax","N° Sprints","Vmax","%Vmax","Acc","Dec","Amax","Dmax"
     ]
     df = df.loc[:, expected]
-
-    # hard-code season
     df = df[df["Season"] == "2526"]
-
-    # downstream processing...
     return df
 
 data = load_data()
 data = data[data["Name"] != "BAGHDADI"]
 
-# ── Pre-process common cols ────────────────────────────────────────────────────
-# Filter by season
+# ── NUMERIC HELPERS: ONLY FIX ────────────────────────────────────────────────
+def _normalize_numeric_value(x):
+    if pd.isna(x):
+        return np.nan
 
-# Duration → int (invalid → 0)
+    x = str(x).strip()
+
+    if x in {"", "None", "nan", "NaN", "<NA>"}:
+        return np.nan
+
+    x = x.replace("\u202f", "").replace("\u00A0", "").replace(" ", "")
+    x = x.replace(",", ".")
+    x = re.sub(r"[^\d.\-]", "", x)
+
+    if x in {"", "-", ".", "-.", ".-", "--"}:
+        return np.nan
+
+    return x
+
+def clean_numeric_series(s: pd.Series) -> pd.Series:
+    cleaned = pd.Series(s, dtype="object").map(_normalize_numeric_value)
+    return pd.to_numeric(cleaned, errors="coerce")
+
+def to_num(s: pd.Series) -> pd.Series:
+    return clean_numeric_series(s)
+
+def to_num_series(s: pd.Series) -> pd.Series:
+    return clean_numeric_series(s)
+
+def _to_num_series(s: pd.Series) -> pd.Series:
+    return clean_numeric_series(s)
+
+def _clean_num(s: pd.Series) -> pd.Series:
+    return clean_numeric_series(s)
+
+# ── Pre-process common cols ────────────────────────────────────────────────────
 if "Duration" in data.columns:
-    # 1) coerce to float (invalid → NaN)
-    durations = pd.to_numeric(
-        data["Duration"]
-            .astype(str)
-            .str.replace(",", ".", regex=False),
-        errors="coerce"
-    )
-    # 2) replace NaN with 0 and cast to plain int
+    durations = clean_numeric_series(data["Duration"])
     data["Duration"] = durations.fillna(0).astype(int)
 
-# Type → uppercase & stripped
 if "Type" in data.columns:
     data["Type"] = data["Type"].astype(str).str.upper().str.strip()
 
-# Name → title-case
 if "Name" in data.columns:
     data["Name"] = (
         data["Name"].astype(str)
@@ -156,14 +173,12 @@ if "Name" in data.columns:
                  .str.title()
     )
 
-# Semaine → integer
 if "Semaine" in data.columns:
     data["Semaine"] = pd.to_numeric(data["Semaine"], errors="coerce").astype("Int64")
 
-# Date → datetime
 if "Date" in data.columns:
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-    
+
 player_positions = {
     "ADEHOUMI":   "PIS",
     "BEN BRAHIM": "ATT",
@@ -192,12 +207,14 @@ player_positions = {
     "KHOUMA":     "DC",
     "KOFFI":      "ATT",
     "ETIEN":      "ATT"
-    
 }
 
-# ── Sidebar: page selection ───────────────────────────────────────────────────
 pages = ["Entrainement","Training Load","Match","Best performance","Joueurs","Minutes de jeu"]
 page  = st.sidebar.selectbox("Choisissez une page", pages)
+
+# -------------------------------------------------------------------------
+# KEEP ALL YOUR OTHER CODE EXACTLY AS IT IS
+# -------------------------------------------------------------------------
 
 
 # ── PAGE: BEST PERFORMANCE ────────────────────────────────────────────────────
@@ -1772,7 +1789,7 @@ elif page == "Entrainement":
              .str.replace(r"[^\d\.\-]", "", regex=True)
         )
     
-        return pd._to_numeric(s, errors="coerce")
+        return pd.to_numeric(s, errors="coerce")
     
     def dominant_type_for_date(df: pd.DataFrame, sel_date, sel_ampm: str | None = None) -> str | None:
         """Dominant Type for sel_date (and AM/PM if provided). Weighted by Duration if possible."""
@@ -2102,7 +2119,7 @@ elif page == "Match":
              .str.replace(r"[^\d\.\-]", "", regex=True)
         )
     
-        return pd.to_num(s, errors="coerce")
+        return pd.to_numeric(s, errors="coerce")
 
     for c in base_cols:
         if c in games.columns:
