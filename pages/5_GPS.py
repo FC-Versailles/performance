@@ -725,15 +725,22 @@ elif page == "Entrainement":
     
     # ---------------- FIX: robust numeric conversion ----------------
     def to_num_series(s: pd.Series) -> pd.Series:
-        """Cleans strings like '1 234', '1 234', '1,234', '1234m' -> numeric."""
-        return pd.to_numeric(
-            s.astype(str)
-             .replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces incl. narrow NBSP
-             .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True),       # keep digits . -
-            errors="coerce"
+        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
+        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
+    
+        s = (
+            s.where(pd.notna(s), np.nan)
+             .map(lambda x: str(x) if pd.notna(x) else np.nan)
         )
+    
+        s = (
+            s.replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace(r"[^\d\.\-]", "", regex=True)
+        )
+    
+        return pd.to_numeric(s, errors="coerce")
     
     # ---------------- FIX: compute means on a SAFE base ----------------
     # filtered_df should be your session dataframe. If it's empty -> show info.
