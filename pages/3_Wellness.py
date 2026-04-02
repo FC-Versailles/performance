@@ -172,7 +172,10 @@ if page == "Pre-entrainement":
 
         # Apply color gradient
         def apply_gradient(df):
-            return df.style.applymap(color_gradient, subset=['Sommeil','Stress', 'Fatigue', 'Courbature', 'Humeur','Alimentation'])
+            cols = ['Sommeil', 'Stress', 'Fatigue', 'Courbature', 'Humeur', 'Alimentation']
+            cols = [c for c in cols if c in df.columns]  # sécurité
+            return df.style.map(color_gradient, subset=cols)
+
         
         row_height = 35  # approx height per row in px
         header_height = 40
