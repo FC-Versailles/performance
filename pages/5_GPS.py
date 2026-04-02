@@ -741,7 +741,7 @@ elif page == "Entrainement":
         )
     
         return pd.to_numeric(s, errors="coerce")
-    
+        
     # ---------------- FIX: compute means on a SAFE base ----------------
     # filtered_df should be your session dataframe. If it's empty -> show info.
     if ("filtered_df" not in locals()) or (filtered_df is None) or (not isinstance(filtered_df, pd.DataFrame)) or filtered_df.empty:
@@ -1725,13 +1725,22 @@ elif page == "Entrainement":
     # =========================
     
     def _to_num_series(s: pd.Series) -> pd.Series:
-        return pd.to_numeric(
-            s.astype(str)
-             .str.replace(r"[^\d\-,\.]", "", regex=True)
-             .str.replace(",", ".", regex=False)
-             .replace("", pd.NA),
-            errors="coerce"
+        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
+        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
+    
+        s = (
+            s.where(pd.notna(s), np.nan)
+             .map(lambda x: str(x) if pd.notna(x) else np.nan)
         )
+    
+        s = (
+            s.replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace(r"[^\d\.\-]", "", regex=True)
+        )
+    
+        return pd._to_numeric(s, errors="coerce")
     
     def dominant_type_for_date(df: pd.DataFrame, sel_date, sel_ampm: str | None = None) -> str | None:
         """Dominant Type for sel_date (and AM/PM if provided). Weighted by Duration if possible."""
@@ -2045,14 +2054,23 @@ elif page == "Match":
         "N° Sprints", "Acc"
     ]
 
-    def to_num(s):
-        return pd.to_numeric(
-            s.astype(str)
-             .str.replace(r"[^\d\-,\.]", "", regex=True)
-             .str.replace(",", ".", regex=False)
-             .replace("", pd.NA),
-            errors="coerce"
+    def to_num(s: pd.Series) -> pd.Series:
+        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
+        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
+    
+        s = (
+            s.where(pd.notna(s), np.nan)
+             .map(lambda x: str(x) if pd.notna(x) else np.nan)
         )
+    
+        s = (
+            s.replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+             .str.replace(",", ".", regex=False)
+             .str.replace(r"[^\d\.\-]", "", regex=True)
+        )
+    
+        return pd.to_num(s, errors="coerce")
 
     for c in base_cols:
         if c in games.columns:
