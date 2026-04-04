@@ -160,54 +160,111 @@ def game_flow_ax(data: pd.DataFrame, period: int, ax, focus_team: str, oppositio
     poss = df[df["type"] == "Pass"].copy()
     teamposs = poss[(poss["pass_outcome"].isna()) & (poss["team"] == focus_team)]
     oppoposs = poss[(poss["pass_outcome"].isna()) & (poss["team"] == opposition)]
+
     teamP = teamposs.groupby("grouped_min").size().rename("team_poss")
     oppoP = oppoposs.groupby("grouped_min").size().rename("oppo_poss")
     matchposs = pd.concat([teamP, oppoP], axis=1).fillna(0).reset_index()
 
+    # force numeric arrays before scipy
+    matchposs["team_poss"] = pd.to_numeric(matchposs["team_poss"], errors="coerce").fillna(0.0)
+    matchposs["oppo_poss"] = pd.to_numeric(matchposs["oppo_poss"], errors="coerce").fillna(0.0)
+
     timelist = matchposs["grouped_min"].tolist()
-    teamP_list = gaussian_filter1d(matchposs["team_poss"].to_numpy(), sigma=1)
-    oppoP_list = gaussian_filter1d(matchposs["oppo_poss"].to_numpy(), sigma=1)
+    teamP_arr = matchposs["team_poss"].to_numpy(dtype=float)
+    oppoP_arr = matchposs["oppo_poss"].to_numpy(dtype=float)
+
+    teamP_list = gaussian_filter1d(teamP_arr, sigma=1)
+    oppoP_list = gaussian_filter1d(oppoP_arr, sigma=1)
     poss_diff = (teamP_list - oppoP_list).tolist()
 
     # OBV diff par bins
-    obv = df.dropna(subset=["obv_total_net"]) if "obv_total_net" in df.columns else pd.DataFrame()
+    if "obv_total_net" in df.columns:
+        obv = df.copy()
+        obv["obv_total_net"] = pd.to_numeric(obv["obv_total_net"], errors="coerce")
+        obv = obv.dropna(subset=["obv_total_net"])
+    else:
+        obv = pd.DataFrame()
+
     if not obv.empty:
         obv = obv[obv["type"].isin(["Pass", "Carry", "Dribble"])].copy()
-        teamOBV = obv[obv["team"] == focus_team].groupby("grouped_min")["obv_total_net"].sum()
-        oppoOBV = obv[obv["team"] == opposition].groupby("grouped_min")["obv_total_net"].sum()
-        matchobv = pd.concat([teamOBV.rename("team"), oppoOBV.rename("oppo")], axis=1).fillna(0).reset_index()
+
+        teamOBV = (
+            obv[obv["team"] == focus_team]
+            .groupby("grouped_min")["obv_total_net"]
+            .sum()
+            .rename("team")
+        )
+        oppoOBV = (
+            obv[obv["team"] == opposition]
+            .groupby("grouped_min")["obv_total_net"]
+            .sum()
+            .rename("oppo")
+        )
+
+        matchobv = pd.concat([teamOBV, oppoOBV], axis=1).fillna(0).reset_index()
+
+        # force numeric arrays before scipy
+        matchobv["team"] = pd.to_numeric(matchobv["team"], errors="coerce").fillna(0.0)
+        matchobv["oppo"] = pd.to_numeric(matchobv["oppo"], errors="coerce").fillna(0.0)
+
         timelistOBV = matchobv["grouped_min"].tolist()
-        teamOBV_list = gaussian_filter1d(matchobv["team"].to_numpy(), sigma=1)
-        oppoOBV_list = gaussian_filter1d(matchobv["oppo"].to_numpy(), sigma=1)
-        obv_diff = (teamOBV_list - oppoOBV_list) * 50  # scaling visuel
+        teamOBV_arr = matchobv["team"].to_numpy(dtype=float)
+        oppoOBV_arr = matchobv["oppo"].to_numpy(dtype=float)
+
+        teamOBV_list = gaussian_filter1d(teamOBV_arr, sigma=1)
+        oppoOBV_list = gaussian_filter1d(oppoOBV_arr, sigma=1)
+        obv_diff = (teamOBV_list - oppoOBV_list) * 50
     else:
         timelistOBV, obv_diff = [], []
 
     # Buts
-    team_goals = df[((df["team"] == focus_team) & (df["shot_outcome"] == "Goal")) | ((df["type"] == "Own Goal For") & (df["team"] == focus_team))]
-    oppo_goals = df[((df["team"] == opposition) & (df["shot_outcome"] == "Goal")) | ((df["type"] == "Own Goal For") & (df["team"] == opposition))]
+    team_goals = df[
+        ((df["team"] == focus_team) & (df["shot_outcome"] == "Goal"))
+        | ((df["type"] == "Own Goal For") & (df["team"] == focus_team))
+    ]
+    oppo_goals = df[
+        ((df["team"] == opposition) & (df["shot_outcome"] == "Goal"))
+        | ((df["type"] == "Own Goal For") & (df["team"] == opposition))
+    ]
 
     ax.set_facecolor(BGCOLOR)
     ax.plot(timelist, poss_diff, "lightgrey")
     y_pos = (np.asarray(poss_diff) + 1e-7) > 0
     y_neg = (np.asarray(poss_diff) - 1e-7) < 0
-    ax.fill_between(timelist, poss_diff, where=y_pos, interpolate=True, color=FOCUS_COLOR, alpha=0.95, label=f"{focus_team} possession")
-    ax.fill_between(timelist, poss_diff, where=y_neg, interpolate=True, color=OPPO_COLOR, alpha=0.95, label=f"{opposition} possession")
+
+    ax.fill_between(
+        timelist, poss_diff, where=y_pos, interpolate=True,
+        color=FOCUS_COLOR, alpha=0.95, label=f"{focus_team} possession"
+    )
+    ax.fill_between(
+        timelist, poss_diff, where=y_neg, interpolate=True,
+        color=OPPO_COLOR, alpha=0.95, label=f"{opposition} possession"
+    )
 
     if len(timelistOBV) and len(obv_diff):
-        ax.bar(timelistOBV, obv_diff, width=3, color=BAR_COLOR, alpha=0.95, zorder=10, label="Danger (OBV diff)")
+        ax.bar(
+            timelistOBV, obv_diff, width=3,
+            color=BAR_COLOR, alpha=0.95, zorder=10, label="Danger (OBV diff)"
+        )
 
     if not team_goals.empty:
-        ax.scatter(team_goals["minute"], np.zeros(len(team_goals))+20, color=FOCUS_COLOR, edgecolor="white", linewidth=2.0, marker="o", s=300, zorder=12, label=f"{focus_team} buts")
+        ax.scatter(
+            team_goals["minute"], np.zeros(len(team_goals)) + 20,
+            color=FOCUS_COLOR, edgecolor="white", linewidth=2.0,
+            marker="o", s=300, zorder=12, label=f"{focus_team} buts"
+        )
     if not oppo_goals.empty:
-        ax.scatter(oppo_goals["minute"], np.zeros(len(oppo_goals))-20, color=OPPO_COLOR, edgecolor="black", linewidth=2.0, marker="o", s=300, zorder=12, label=f"{opposition} buts")
+        ax.scatter(
+            oppo_goals["minute"], np.zeros(len(oppo_goals)) - 20,
+            color=OPPO_COLOR, edgecolor="black", linewidth=2.0,
+            marker="o", s=300, zorder=12, label=f"{opposition} buts"
+        )
 
     ax.grid(True, color="grey", lw=1, alpha=0.5)
     ax.set_ylim(-30, 30)
     ax.set_yticklabels([])
     for s in ["top", "right"]:
         ax.spines[s].set_visible(False)
-
 def plot_xg_cumulative(data: pd.DataFrame, team_name: str, oppo_name: str):
     events_shots = data[data["type"] == "Shot"].copy()
     team_shots = events_shots[events_shots["team"] == team_name]
