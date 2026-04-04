@@ -29,7 +29,6 @@ import plotly.graph_objects as go
 from scipy.stats import zscore
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-
 # ── Constants ───────────────────────────────────────"──────────────────────────
 
 st.set_page_config(layout='wide')
@@ -45,7 +44,7 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ── Fetch & cache data ────────────────────────────────────────────────────────
 SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE_GPS     = 'token._gps.pickle'
+TOKEN_FILE_GPS     = 'token.pickle'
 SPREADSHEET_ID_GPS = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
 RANGE_NAME = 'Feuille 1!A1:AC'
@@ -93,6 +92,7 @@ def load_data():
     creds = get_credentials()
     service = build('sheets', 'v4', credentials=creds)
 
+    # === Use the fast values().get() endpoint ===
     result = (
         service.spreadsheets()
                .values()
@@ -106,9 +106,11 @@ def load_data():
         st.error("❌ Aucune donnée trouvée dans la plage.")
         return pd.DataFrame()
 
+    # first row = header, rest = data
     header, data_rows = rows[0], rows[1:]
     df = pd.DataFrame(data_rows, columns=header)
 
+    # keep only your 24 columns
     expected = [
         "Season","Semaine","HUMEUR","PLAISIR","RPE","ERPE","Date","AMPM","Jour","Type","Ttotal","Teffectif","Name",
         "Duration","Distance","M/min","Distance 15km/h","M/min 15km/h",
@@ -116,55 +118,36 @@ def load_data():
         "Distance 90% Vmax","N° Sprints","Vmax","%Vmax","Acc","Dec","Amax","Dmax"
     ]
     df = df.loc[:, expected]
+
+    # hard-code season
     df = df[df["Season"] == "2526"]
+
+    # downstream processing...
     return df
 
 data = load_data()
 data = data[data["Name"] != "BAGHDADI"]
 
-# ── NUMERIC HELPERS: ONLY FIX ────────────────────────────────────────────────
-def _normalize_numeric_value(x):
-    if pd.isna(x):
-        return np.nan
-
-    x = str(x).strip()
-
-    if x in {"", "None", "nan", "NaN", "<NA>"}:
-        return np.nan
-
-    x = x.replace("\u202f", "").replace("\u00A0", "").replace(" ", "")
-    x = x.replace(",", ".")
-    x = re.sub(r"[^\d.\-]", "", x)
-
-    if x in {"", "-", ".", "-.", ".-", "--"}:
-        return np.nan
-
-    return x
-
-def clean_numeric_series(s: pd.Series) -> pd.Series:
-    cleaned = pd.Series(s, dtype="object").map(_normalize_numeric_value)
-    return pd.to_numeric(cleaned, errors="coerce")
-
-def to_num(s: pd.Series) -> pd.Series:
-    return clean_numeric_series(s)
-
-def to_num_series(s: pd.Series) -> pd.Series:
-    return clean_numeric_series(s)
-
-def _to_num_series(s: pd.Series) -> pd.Series:
-    return clean_numeric_series(s)
-
-def _clean_num(s: pd.Series) -> pd.Series:
-    return clean_numeric_series(s)
-
 # ── Pre-process common cols ────────────────────────────────────────────────────
+# Filter by season
+
+# Duration → int (invalid → 0)
 if "Duration" in data.columns:
-    durations = clean_numeric_series(data["Duration"])
+    # 1) coerce to float (invalid → NaN)
+    durations = pd.to_numeric(
+        data["Duration"]
+            .astype(str)
+            .str.replace(",", ".", regex=False),
+        errors="coerce"
+    )
+    # 2) replace NaN with 0 and cast to plain int
     data["Duration"] = durations.fillna(0).astype(int)
 
+# Type → uppercase & stripped
 if "Type" in data.columns:
     data["Type"] = data["Type"].astype(str).str.upper().str.strip()
 
+# Name → title-case
 if "Name" in data.columns:
     data["Name"] = (
         data["Name"].astype(str)
@@ -173,12 +156,14 @@ if "Name" in data.columns:
                  .str.title()
     )
 
+# Semaine → integer
 if "Semaine" in data.columns:
     data["Semaine"] = pd.to_numeric(data["Semaine"], errors="coerce").astype("Int64")
 
+# Date → datetime
 if "Date" in data.columns:
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-
+    
 player_positions = {
     "ADEHOUMI":   "PIS",
     "BEN BRAHIM": "ATT",
@@ -207,14 +192,12 @@ player_positions = {
     "KHOUMA":     "DC",
     "KOFFI":      "ATT",
     "ETIEN":      "ATT"
+    
 }
 
+# ── Sidebar: page selection ───────────────────────────────────────────────────
 pages = ["Entrainement","Training Load","Match","Best performance","Joueurs","Minutes de jeu"]
 page  = st.sidebar.selectbox("Choisissez une page", pages)
-
-# -------------------------------------------------------------------------
-# KEEP ALL YOUR OTHER CODE EXACTLY AS IT IS
-# -------------------------------------------------------------------------
 
 
 # ── PAGE: BEST PERFORMANCE ────────────────────────────────────────────────────
@@ -478,24 +461,15 @@ elif page == "Entrainement":
     ]
     target_fields = [c for c in objective_fields if c != "RPE"]
     
-    
     def to_num(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .str.replace("\u202f", "", regex=False)
+             .replace("", pd.NA),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
     
     def resolve_day_type(date_rows: pd.DataFrame, sel_ampm: str) -> str | None:
         """
@@ -751,22 +725,15 @@ elif page == "Entrainement":
     
     # ---------------- FIX: robust numeric conversion ----------------
     def to_num_series(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        """Cleans strings like '1 234', '1 234', '1,234', '1234m' -> numeric."""
+        return pd.to_numeric(
+            s.astype(str)
+             .replace(["None", "nan", "NaN", ""], np.nan)
+             .str.replace(r"[ \u202f\u00A0]", "", regex=True)   # spaces incl. narrow NBSP
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .str.replace(r"[^\d\.\-]", "", regex=True),       # keep digits . -
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
     
     # ---------------- FIX: compute means on a SAFE base ----------------
     # filtered_df should be your session dataframe. If it's empty -> show info.
@@ -1479,26 +1446,14 @@ elif page == "Entrainement":
             "Distance 20-25km/h", "Distance 25km/h", "Acc", "Dec", "Distance 90% Vmax"
         ]]
     
-        
         def _clean_num(s: pd.Series) -> pd.Series:
-            """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-            s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-        
-            s = (
-                s.where(pd.notna(s), np.nan)
-                 .map(lambda x: str(x) if pd.notna(x) else np.nan)
-            )
-        
-            s = (
-                s.replace(["None", "nan", "NaN", ""], np.nan)
-                 .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+            return pd.to_numeric(
+                s.astype(str)
+                 .str.replace(r"[^\d\-,\.]", "", regex=True)
                  .str.replace(",", ".", regex=False)
-                 .str.replace(r"[^\d\.\-]", "", regex=True)
+                 .str.replace("\u202f", "", regex=False),
+                errors="coerce"
             )
-        
-            return pd.to_numeric(s, errors="coerce")
-    
-    
     
         for c in num_cols + ["RPE", "Vmax"]:
             if c in date_df.columns:
@@ -1514,25 +1469,14 @@ elif page == "Entrainement":
     # -------------------------------------------------------------------------
     # 2) Nettoyage + charge_df + position (optionnel)
     # -------------------------------------------------------------------------
-
-    
     def clean_numeric_series(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .str.replace("\u202f", "", regex=False),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
     
     keep_metrics = [m for m in charge_metrics if m in session_df.columns]
     charge_df = session_df[["Name"] + keep_metrics].copy()
@@ -1774,22 +1718,13 @@ elif page == "Entrainement":
     # =========================
     
     def _to_num_series(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .replace("", pd.NA),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
     
     def dominant_type_for_date(df: pd.DataFrame, sel_date, sel_ampm: str | None = None) -> str | None:
         """Dominant Type for sel_date (and AM/PM if provided). Weighted by Duration if possible."""
@@ -2103,23 +2038,14 @@ elif page == "Match":
         "N° Sprints", "Acc"
     ]
 
-    def to_num(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+    def to_num(s):
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .replace("", pd.NA),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
 
     for c in base_cols:
         if c in games.columns:
@@ -2547,25 +2473,16 @@ elif page == "Match":
     ALL_COLS = ["Name","Duration"] + METRICS
     
     # --- numeric cleaning -------------------------------------------------------
-    
-    def to_num(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
+    def to_num(s):
+        return pd.to_numeric(
+            pd.Series(s, dtype="object")
+              .astype(str)
+              .str.replace(r"[^\d\-,\.]", "", regex=True)
+              .str.replace(",", ".", regex=False)
+              .replace("", pd.NA),
+            errors="coerce"
         )
     
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
-             .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
-        )
-
-        return pd.to_numeric(s, errors="coerce")
-        
     # ===== 1) Build player reference from all matches ==========================
     rate_like = {"Vmax"}
     match_all["Duration"] = to_num(match_all["Duration"])
@@ -3096,6 +3013,7 @@ elif page == "Joueurs":
                     make_game_bar(p_game_jour, "Vmax", f"{sel} – Vmax par match", text_fmt=".1f"),
                     use_container_width=True
                 )
+
 
 
 
@@ -3724,22 +3642,15 @@ elif page == "Training Load":
     BAR_COLOR = "#0031E3"
     WEEK_METRICS = ["Distance", "Distance 15km/h", "Distance 25km/h", "Acc", "Dec"]
     
-
-    
+    # --------- helpers ---------
     def clean_numeric_series(s: pd.Series) -> pd.Series:
-        """Nettoie une série texte et la convertit en numérique, sans dépendre du backend pyarrow."""
-        s = pd.Series(s, dtype="object")
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-             .replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .str.replace("\u202f", "", regex=False),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
     
     @st.cache_data(show_spinner=False)
     def build_reference_match(data: pd.DataFrame) -> pd.DataFrame:
@@ -4038,26 +3949,15 @@ elif page == "Training Load":
     # =========================
     st.markdown("#### 🏃 Charge UA")
     
-
+    # local numeric cleaner (if not defined globally)
     def to_num(s: pd.Series) -> pd.Series:
-        """Convertit des chaînes type '1 234', '1 234', '1,234', '1234m' en numérique."""
-        s = pd.Series(s, dtype="object")  # évite le backend string[pyarrow]
-    
-        s = (
-            s.where(pd.notna(s), np.nan)
-             .map(lambda x: str(x) if pd.notna(x) else np.nan)
-        )
-    
-        s = (
-            s.replace(["None", "nan", "NaN", ""], np.nan)
-             .str.replace(r"[ \u202f\u00A0]", "", regex=True)
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r"[^\d\-,\.]", "", regex=True)
              .str.replace(",", ".", regex=False)
-             .str.replace(r"[^\d\.\-]", "", regex=True)
+             .replace("", pd.NA),
+            errors="coerce"
         )
-    
-        return pd.to_numeric(s, errors="coerce")
-
-
 
     filt = train_data_week.copy()
 
