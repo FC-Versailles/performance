@@ -44,7 +44,7 @@ st.markdown("<hr style='border:1px solid #ddd' />", unsafe_allow_html=True)
 
 # ── Fetch & cache data ────────────────────────────────────────────────────────
 SCOPES         = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-TOKEN_FILE_GPS     = 'token._gos.pickle'
+TOKEN_FILE_GPS     = 'token._gps.pickle'
 SPREADSHEET_ID_GPS = '1NfaLx6Yn09xoOHRon9ri6zfXZTkU1dFFX2rfW1kZvmw'
 SHEET_NAME     = 'Feuille 1'
 RANGE_NAME = 'Feuille 1!A1:AC'
