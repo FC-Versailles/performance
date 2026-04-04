@@ -159,7 +159,7 @@ def fetch_google_sheet(spreadsheet_id: str, range_name: str,
 
     # Conversion numérique "best-effort"
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
     return df
 
